@@ -42,6 +42,12 @@ public sealed class FunctionRegistry : IFunctionRegistry
         registry.Register(new PowerFunction());
         registry.Register(new SqrtFunction());
 
+        // Financeiras
+        registry.Register(new NpvFunction());
+        registry.Register(new IrrFunction());
+        registry.Register(new FvFunction());
+        registry.Register(new RateFunction());
+
         return registry;
     }
 

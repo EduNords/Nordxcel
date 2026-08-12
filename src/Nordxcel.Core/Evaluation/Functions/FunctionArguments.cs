@@ -29,11 +29,28 @@ public static class FunctionArguments
     public static bool TryCollectNumbers(FunctionCall call, List<double> numbers, out CellErrorType error)
     {
         ArgumentNullException.ThrowIfNull(call);
+
+        return TryCollectNumbers(call, 0, call.ArgumentCount, numbers, out error);
+    }
+
+    /// <summary>
+    /// Igual ao anterior, mas restrito a uma faixa de argumentos. Serve para
+    /// funções cujos primeiros argumentos não fazem parte da série, como a taxa
+    /// em <c>VPL(taxa;valor1;valor2;...)</c>.
+    /// </summary>
+    public static bool TryCollectNumbers(
+        FunctionCall call,
+        int startIndex,
+        int endExclusive,
+        List<double> numbers,
+        out CellErrorType error)
+    {
+        ArgumentNullException.ThrowIfNull(call);
         ArgumentNullException.ThrowIfNull(numbers);
 
         error = CellErrorType.None;
 
-        for (int index = 0; index < call.ArgumentCount; index++)
+        for (int index = startIndex; index < endExclusive; index++)
         {
             if (call.IsMissing(index))
             {
