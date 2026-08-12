@@ -1,8 +1,9 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Nordxcel.Desktop.App"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Light">
+             <!-- Tema claro fixo: o sistema de cores de modelagem (azul, preto, verde)
+                  pressupõe fundo claro, e é assim que o Excel abre por padrão. -->
 
     <Application.Styles>
         <FluentTheme />

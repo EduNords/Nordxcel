@@ -10,16 +10,25 @@ public class CellColorClassifierTests
 {
     private const string Sheet = "DCF";
 
-    private static CellColorRole Classify(string? formula) =>
+    private static CellColorRole Classify(string? formula, CellValue? value = null) =>
         CellColorClassifier.Classify(
             formula is null ? null : FormulaParser.ParseDefault(formula),
+            value ?? CellValue.Number(1),
             Sheet);
 
     [Fact]
-    public void SemFormula_EhEntradaManualEFicaAzul()
+    public void NumeroDigitado_EhPremissaEFicaAzul()
     {
-        Assert.Equal(CellColorRole.Input, Classify(null));
+        Assert.Equal(CellColorRole.Input, Classify(null, CellValue.Number(0.11)));
         Assert.Equal(new RgbColor(0, 0, 255), CellColorClassifier.ColorOf(CellColorRole.Input));
+    }
+
+    [Fact]
+    public void TextoDigitado_EhRotuloEFicaPreto()
+    {
+        // A convenção colore os números do modelo; rótulo azul só poluiria a leitura.
+        Assert.Equal(CellColorRole.Label, Classify(null, CellValue.Text("Receita líquida")));
+        Assert.Equal(new RgbColor(0, 0, 0), CellColorClassifier.ColorOf(CellColorRole.Label));
     }
 
     [Fact]
@@ -36,6 +45,10 @@ public class CellColorClassifierTests
         // Constante escrita como fórmula, tipo =365, continua sendo cálculo.
         Assert.Equal(CellColorRole.Formula, Classify("365"));
     }
+
+    [Fact]
+    public void FormulaQueDevolveTexto_ContinuaSendoFormula() =>
+        Assert.Equal(CellColorRole.Formula, Classify("\"Ano \"&A1", CellValue.Text("Ano 1")));
 
     [Fact]
     public void FormulaQuePuxaDeOutraAba_FicaVerde()
@@ -76,16 +89,26 @@ public class CellColorClassifierTests
 
         var engine = new CalculationEngine(workbook);
 
-        var input = new CellLocation(Sheet, CellAddress.Parse("A1"));
-        var formula = new CellLocation(Sheet, CellAddress.Parse("A2"));
-        var link = new CellLocation(Sheet, CellAddress.Parse("A3"));
+        var label = new CellLocation(Sheet, CellAddress.Parse("A1"));
+        var input = new CellLocation(Sheet, CellAddress.Parse("B1"));
+        var formula = new CellLocation(Sheet, CellAddress.Parse("B2"));
+        var link = new CellLocation(Sheet, CellAddress.Parse("B3"));
 
+        engine.SetValue(label, CellValue.Text("WACC"));
         engine.SetValue(input, CellValue.Number(0.11));
-        engine.SetFormula(formula, "A1*2");
+        engine.SetFormula(formula, "B1*2");
         engine.SetFormula(link, "Premissas!B1");
 
-        Assert.Equal(CellColorRole.Input, CellColorClassifier.Classify(engine.GetFormula(input), Sheet));
-        Assert.Equal(CellColorRole.Formula, CellColorClassifier.Classify(engine.GetFormula(formula), Sheet));
-        Assert.Equal(CellColorRole.Link, CellColorClassifier.Classify(engine.GetFormula(link), Sheet));
+        Worksheet sheet = workbook[Sheet];
+
+        CellColorRole RoleOf(CellLocation location) => CellColorClassifier.Classify(
+            sheet.GetCell(location.Address),
+            engine.GetFormula(location),
+            Sheet);
+
+        Assert.Equal(CellColorRole.Label, RoleOf(label));
+        Assert.Equal(CellColorRole.Input, RoleOf(input));
+        Assert.Equal(CellColorRole.Formula, RoleOf(formula));
+        Assert.Equal(CellColorRole.Link, RoleOf(link));
     }
 }

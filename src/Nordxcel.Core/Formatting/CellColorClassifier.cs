@@ -8,7 +8,7 @@ namespace Nordxcel.Core.Formatting;
 /// <summary>Papel de uma célula no modelo, que define a cor automática da fonte.</summary>
 public enum CellColorRole
 {
-    /// <summary>Premissa digitada à mão. Azul.</summary>
+    /// <summary>Premissa numérica digitada à mão. Azul.</summary>
     Input,
 
     /// <summary>Fórmula que só usa a própria aba. Preto.</summary>
@@ -16,6 +16,12 @@ public enum CellColorRole
 
     /// <summary>Fórmula que puxa valor de outra aba. Verde.</summary>
     Link,
+
+    /// <summary>
+    /// Texto fixo: rótulo de linha, cabeçalho, nota. Preto.
+    /// A convenção colore os <b>números</b> do modelo; um rótulo azul só polui.
+    /// </summary>
+    Label,
 }
 
 /// <summary>
@@ -32,14 +38,17 @@ public static class CellColorClassifier
 
     public static readonly RgbColor LinkColor = new(0, 128, 0);
 
-    /// <summary>Classifica pela árvore da fórmula. <c>null</c> significa entrada manual.</summary>
-    public static CellColorRole Classify(FormulaNode? formula, string currentSheet)
+    /// <summary>
+    /// Classifica pela árvore da fórmula e pelo valor. Fórmula <c>null</c> significa
+    /// conteúdo digitado: número vira premissa azul, texto vira rótulo preto.
+    /// </summary>
+    public static CellColorRole Classify(FormulaNode? formula, CellValue value, string currentSheet)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(currentSheet);
 
         if (formula is null)
         {
-            return CellColorRole.Input;
+            return value.IsText ? CellColorRole.Label : CellColorRole.Input;
         }
 
         var cells = new List<CellLocation>();
@@ -64,6 +73,14 @@ public static class CellColorClassifier
         }
 
         return CellColorRole.Formula;
+    }
+
+    /// <summary>Classifica a célula inteira, buscando a fórmula já interpretada.</summary>
+    public static CellColorRole Classify(Cell cell, FormulaNode? formula, string currentSheet)
+    {
+        ArgumentNullException.ThrowIfNull(cell);
+
+        return Classify(formula, cell.Value, currentSheet);
     }
 
     public static RgbColor ColorOf(CellColorRole role) => role switch

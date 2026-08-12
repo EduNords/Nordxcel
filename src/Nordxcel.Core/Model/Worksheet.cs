@@ -33,6 +33,15 @@ public sealed class Worksheet
     /// <summary>Células com conteúdo, sem ordem definida.</summary>
     public IReadOnlyDictionary<CellAddress, Cell> Cells => _cells;
 
+    /// <summary>Colunas com largura diferente da padrão. A grande maioria não aparece aqui.</summary>
+    public IReadOnlyDictionary<int, double> ColumnWidths => _columnWidths;
+
+    /// <summary>Linhas com altura diferente da padrão.</summary>
+    public IReadOnlyDictionary<int, double> RowHeights => _rowHeights;
+
+    /// <summary>Sobe a cada mudança de dimensão, para a geometria saber que precisa recalcular.</summary>
+    public int LayoutVersion { get; private set; }
+
     public int CellCount => _cells.Count;
 
     /// <summary>
@@ -106,6 +115,7 @@ public sealed class Worksheet
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
 
         _columnWidths[column] = width;
+        LayoutVersion++;
     }
 
     public double GetRowHeight(int row) =>
@@ -118,6 +128,7 @@ public sealed class Worksheet
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
 
         _rowHeights[row] = height;
+        LayoutVersion++;
     }
 
     /// <summary>
