@@ -82,4 +82,26 @@ public static class CellErrors
         error = CellErrorType.None;
         return false;
     }
+
+    /// <summary>
+    /// Reconhece um literal de erro no início do texto, devolvendo quantos caracteres
+    /// ele ocupa. É o que permite ao tokenizer aceitar <c>SEERRO(A1;#N/D)</c>.
+    /// Casa sempre o literal mais longo, para que <c>#NÚM!</c> não seja confundido com <c>#N/D</c>.
+    /// </summary>
+    public static bool TryMatchPrefix(ReadOnlySpan<char> text, out CellErrorType error, out int length)
+    {
+        error = CellErrorType.None;
+        length = 0;
+
+        foreach ((CellErrorType type, string candidate) in Map)
+        {
+            if (candidate.Length > length && text.StartsWith(candidate, StringComparison.OrdinalIgnoreCase))
+            {
+                error = type;
+                length = candidate.Length;
+            }
+        }
+
+        return length > 0;
+    }
 }
