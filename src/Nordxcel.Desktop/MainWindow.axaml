@@ -19,6 +19,7 @@
                 <MenuItem Header="Descongelar Painéis" Click="OnUnfreezePanes" />
             </MenuItem>
         </Menu>
+        <controls:FormattingToolbar x:Name="Toolbar" DockPanel.Dock="Top" />
         <controls:FormulaBar x:Name="Formulas" DockPanel.Dock="Top" />
         <controls:SheetTabStrip x:Name="Tabs" DockPanel.Dock="Bottom" />
         <controls:SpreadsheetView x:Name="Sheet" />

@@ -8,11 +8,18 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Nordxcel.Core.Calculation;
 using Nordxcel.Core.Editing;
+using Nordxcel.Core.Formatting;
 using Nordxcel.Core.Layout;
 using Nordxcel.Core.Model;
 
-// O Avalonia tem um NavigationDirection próprio, para foco entre controles.
+// O Avalonia tem um NavigationDirection, HorizontalAlignment e VerticalAlignment
+// próprios (de layout de UI), diferentes dos de estilo de célula do Core.
 using NavigationDirection = Nordxcel.Core.Layout.NavigationDirection;
+using CoreHorizontalAlignment = Nordxcel.Core.Model.Styling.HorizontalAlignment;
+using CoreVerticalAlignment = Nordxcel.Core.Model.Styling.VerticalAlignment;
+using RgbColor = Nordxcel.Core.Model.Styling.RgbColor;
+using CellStyle = Nordxcel.Core.Model.Styling.CellStyle;
+using BorderLineStyle = Nordxcel.Core.Model.Styling.BorderLineStyle;
 
 namespace Nordxcel.Desktop.Controls;
 
@@ -189,6 +196,138 @@ public sealed class SpreadsheetView : UserControl
     {
         _canvas.UnfreezePanes();
         FocusGrid();
+    }
+
+    // ----------------------------------------------------------- formatação
+
+    /// <summary>Estilo da célula ativa — o que a barra de formatação reflete ao trocar de seleção.</summary>
+    public CellStyle ActiveStyle => _canvas.ActiveCell.Style;
+
+    /// <summary>Formato de número da célula ativa.</summary>
+    public string? ActiveNumberFormat => _canvas.ActiveCell.NumberFormat;
+
+    /// <summary>Aplica uma mudança de estilo a toda a seleção.</summary>
+    public void ApplyStyle(Func<CellStyle, CellStyle> transform)
+    {
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        RangeEditing.ApplyStyle(sheet, _canvas.Selection.Range, transform);
+        AfterFormatChange();
+    }
+
+    /// <summary>
+    /// Alterna negrito/itálico/sublinhado com base no estado da célula ativa: se
+    /// ela já está, a seleção toda desliga; senão, a seleção toda liga — igual ao
+    /// Excel, que não trata cada célula da seleção de forma independente.
+    /// <para>
+    /// O valor alvo é lido <b>antes</b> de entrar no laço de células, não dentro
+    /// do transform. A célula ativa costuma ser a primeira do intervalo a ser
+    /// processada; se <c>ActiveStyle</c> fosse reavaliado a cada célula, a partir
+    /// da segunda ele já enxergaria o valor que a própria primeira célula acabou
+    /// de gravar, invertendo o alvo de volta ao original a cada duas células.
+    /// </para>
+    /// </summary>
+    public void ToggleBold()
+    {
+        bool target = !ActiveStyle.Bold;
+        ApplyStyle(s => s with { Bold = target });
+    }
+
+    public void ToggleItalic()
+    {
+        bool target = !ActiveStyle.Italic;
+        ApplyStyle(s => s with { Italic = target });
+    }
+
+    public void ToggleUnderline()
+    {
+        bool target = !ActiveStyle.Underline;
+        ApplyStyle(s => s with { Underline = target });
+    }
+
+    /// <summary><c>null</c> volta para a cor automática do sistema azul/preto/verde.</summary>
+    public void SetFontColor(RgbColor? color) => ApplyStyle(s => s with { FontColor = color });
+
+    /// <summary><c>null</c> remove o preenchimento.</summary>
+    public void SetFillColor(RgbColor? color) => ApplyStyle(s => s with { BackgroundColor = color });
+
+    public void SetFontFamily(string family) => ApplyStyle(s => s with { FontFamily = family });
+
+    public void SetFontSize(double size) => ApplyStyle(s => s with { FontSize = size });
+
+    public void SetHorizontalAlignment(CoreHorizontalAlignment alignment) =>
+        ApplyStyle(s => s with { HorizontalAlignment = alignment });
+
+    public void SetVerticalAlignment(CoreVerticalAlignment alignment) =>
+        ApplyStyle(s => s with { VerticalAlignment = alignment });
+
+    public void ApplyBorderPreset(BorderPreset preset, BorderLineStyle style, RgbColor color)
+    {
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        BorderEditing.Apply(sheet, _canvas.Selection.Range, preset, style, color);
+        AfterFormatChange();
+    }
+
+    /// <summary><c>null</c> mask volta ao formato geral.</summary>
+    public void SetNumberFormat(string? mask)
+    {
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        RangeEditing.ApplyNumberFormat(sheet, _canvas.Selection.Range, mask);
+        AfterFormatChange();
+    }
+
+    /// <summary>Botão de aumentar/diminuir casas decimais — cada célula mantém a própria máscara, só muda a precisão.</summary>
+    public void StepDecimals(bool increase)
+    {
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        RangeEditing.Apply(sheet, _canvas.Selection.Range, cell => cell with
+        {
+            NumberFormat = increase
+                ? StandardNumberFormats.IncreaseDecimals(cell.NumberFormat)
+                : StandardNumberFormats.DecreaseDecimals(cell.NumberFormat),
+        });
+
+        AfterFormatChange();
+    }
+
+    private Worksheet? CurrentSheet() =>
+        _canvas.Engine is { } engine && !string.IsNullOrEmpty(_canvas.SheetName) && engine.Workbook.TryGetWorksheet(_canvas.SheetName, out Worksheet? sheet)
+            ? sheet
+            : null;
+
+    /// <summary>
+    /// Formatação não muda valor calculado nenhum, então não passa pelo motor de
+    /// recálculo — só redesenha e avisa que o documento mudou.
+    /// </summary>
+    private void AfterFormatChange()
+    {
+        _canvas.Refresh();
+        SyncScrollBars();
+        ContentChanged?.Invoke(this, EventArgs.Empty);
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
     // -------------------------------------------------------------- edição
