@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Nordxcel.Core/Nordxcel.Core.csproj" />
+    <Project Path="src/Nordxcel.Desktop/Nordxcel.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Nordxcel.Core.Tests/Nordxcel.Core.Tests.csproj" />
+  </Folder>
+</Solution>
