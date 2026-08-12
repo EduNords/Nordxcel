@@ -64,15 +64,24 @@ public sealed class FormulaParser(FormulaSyntax? syntax = null)
 
     private FormulaNode ParseComparison(Cursor cursor)
     {
-        FormulaNode left = ParseConcat(cursor);
+        cursor.EnterNesting();
 
-        while (TryReadBinaryOperator(cursor.Current.Kind, ComparisonOperators, out BinaryOperator op))
+        try
         {
-            cursor.Advance();
-            left = new BinaryNode(op, left, ParseConcat(cursor));
-        }
+            FormulaNode left = ParseConcat(cursor);
 
-        return left;
+            while (TryReadBinaryOperator(cursor.Current.Kind, ComparisonOperators, out BinaryOperator op))
+            {
+                cursor.Advance();
+                left = new BinaryNode(op, left, ParseConcat(cursor));
+            }
+
+            return left;
+        }
+        finally
+        {
+            cursor.ExitNesting();
+        }
     }
 
     private FormulaNode ParseConcat(Cursor cursor)
@@ -143,7 +152,16 @@ public sealed class FormulaParser(FormulaSyntax? syntax = null)
                 ? UnaryOperator.Plus
                 : UnaryOperator.Negate;
 
-            return new UnaryNode(op, ParseUnary(cursor));
+            cursor.EnterNesting();
+
+            try
+            {
+                return new UnaryNode(op, ParseUnary(cursor));
+            }
+            finally
+            {
+                cursor.ExitNesting();
+            }
         }
 
         return ParsePostfix(cursor);
@@ -329,13 +347,33 @@ public sealed class FormulaParser(FormulaSyntax? syntax = null)
         return false;
     }
 
+    /// <summary>
+    /// Limite de aninhamento, o mesmo do Excel. Existe para que uma fórmula
+    /// absurdamente aninhada devolva um erro em vez de estourar a pilha — um
+    /// <c>StackOverflowException</c> não é capturável e derrubaria o aplicativo.
+    /// </summary>
+    public const int MaxNestingDepth = 64;
+
     /// <summary>Posição de leitura sobre a lista de tokens.</summary>
     private sealed class Cursor(IReadOnlyList<FormulaToken> tokens)
     {
         private int _index;
+        private int _depth;
 
         public FormulaToken Current => tokens[_index];
 
         public FormulaToken Advance() => tokens[_index++];
+
+        public void EnterNesting()
+        {
+            if (++_depth > MaxNestingDepth)
+            {
+                throw new FormulaSyntaxException(
+                    $"A fórmula passa do limite de {MaxNestingDepth} níveis de aninhamento.",
+                    Current.Position);
+            }
+        }
+
+        public void ExitNesting() => _depth--;
     }
 }
