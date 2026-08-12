@@ -58,6 +58,13 @@ public sealed class CalculationEngine
     /// <summary>Quantas células com fórmula foram avaliadas no último recálculo.</summary>
     public int LastRecalculatedCount { get; private set; }
 
+    /// <summary>
+    /// Árvore já interpretada da fórmula da célula, ou <c>null</c> se ela não tem
+    /// fórmula. A cor automática da célula sai daqui, sem reinterpretar o texto.
+    /// </summary>
+    public FormulaNode? GetFormula(CellLocation location) =>
+        _formulas.GetValueOrDefault(location);
+
     /// <summary>Refaz fórmulas e grafo a partir do conteúdo atual da pasta.</summary>
     public void Rebuild()
     {
