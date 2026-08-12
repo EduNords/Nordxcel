@@ -26,7 +26,7 @@ public sealed class FormulaEvaluator
         ArgumentNullException.ThrowIfNull(context);
 
         Context = context;
-        _functions = functions ?? EmptyFunctionRegistry.Instance;
+        _functions = functions ?? FunctionRegistry.Standard;
         _syntax = syntax ?? FormulaSyntax.Default;
     }
 
@@ -200,36 +200,11 @@ public sealed class FormulaEvaluator
                     : FromNumber(a / b);
 
             case BinaryOperator.Power:
-                return EvaluatePower(a, b);
+                return FormulaValue.FromScalar(NumericResult.Power(a, b));
 
             default:
                 throw new NotSupportedException($"Operador aritmético não suportado: {op}.");
         }
-    }
-
-    private static FormulaValue EvaluatePower(double baseValue, double exponent)
-    {
-        if (baseValue == 0d)
-        {
-            // 0^0 é indeterminado e 0^negativo é divisão por zero, como no Excel.
-            if (exponent == 0d)
-            {
-                return FormulaValue.FromError(CellErrorType.Number);
-            }
-
-            if (exponent < 0d)
-            {
-                return FormulaValue.FromError(CellErrorType.DivideByZero);
-            }
-        }
-
-        // Raiz de índice par sobre base negativa não tem resultado real.
-        if (baseValue < 0d && exponent != Math.Truncate(exponent))
-        {
-            return FormulaValue.FromError(CellErrorType.Number);
-        }
-
-        return FromNumber(Math.Pow(baseValue, exponent));
     }
 
     private FormulaValue EvaluateFunction(FunctionNode node, EvaluationScope scope)
@@ -250,22 +225,6 @@ public sealed class FormulaEvaluator
         return FormulaValue.FromScalar(function.Invoke(call));
     }
 
-    /// <summary>
-    /// Empacota um resultado numérico, transformando estouro e indeterminação em
-    /// erro de célula em vez de deixar vazar infinito ou NaN para a planilha.
-    /// </summary>
-    private static FormulaValue FromNumber(double value)
-    {
-        if (double.IsNaN(value))
-        {
-            return FormulaValue.FromError(CellErrorType.Number);
-        }
-
-        if (double.IsInfinity(value))
-        {
-            return FormulaValue.FromError(CellErrorType.Number);
-        }
-
-        return FormulaValue.FromScalar(CellValue.Number(value));
-    }
+    private static FormulaValue FromNumber(double value) =>
+        FormulaValue.FromScalar(NumericResult.FromDouble(value));
 }

@@ -65,7 +65,7 @@ public class FormulaEvaluatorTests
 
     [Fact]
     public void FuncaoDesconhecida_ViraErroDeNome() =>
-        Assert.Equal(CellErrorType.Name, Error("SOMA(1;2)"));
+        Assert.Equal(CellErrorType.Name, Error("PROCV(1;A1:B2;2)"));
 
     // ------------------------------------------------------------ aritmética
 
