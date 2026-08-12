@@ -45,6 +45,32 @@ public sealed class Workbook
         return worksheet;
     }
 
+    /// <summary>Adiciona uma aba com nome gerado automaticamente, como o botão "+" da barra de abas.</summary>
+    public Worksheet AddWorksheet() => AddWorksheet(CreateUniqueWorksheetName());
+
+    /// <summary>
+    /// Gera um nome de aba livre a partir do prefixo: <c>Planilha2</c> quando
+    /// <c>Planilha1</c> já existe, e assim por diante.
+    /// </summary>
+    public string CreateUniqueWorksheetName(string prefix = "Planilha")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+
+        // Existem N abas no máximo, então N+1 candidatos garantem achar um livre
+        // pela casa dos pombos, mesmo que nenhuma aba já siga esse padrão de nome.
+        for (int i = 1; i <= _worksheets.Count + 1; i++)
+        {
+            string candidate = $"{prefix}{i}";
+
+            if (!ContainsWorksheet(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException("Não foi possível gerar um nome de aba livre.");
+    }
+
     public bool TryGetWorksheet(string name, [NotNullWhen(true)] out Worksheet? worksheet)
     {
         if (string.IsNullOrEmpty(name))

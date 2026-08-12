@@ -37,9 +37,35 @@ public sealed class CellEditRequestedEventArgs(CellAddress address, string? init
 /// Desenha a planilha e trata a interação de teclado e mouse. Só percorre as
 /// células visíveis, então o custo de um quadro depende do tamanho da janela e
 /// não do tamanho do modelo.
+/// <para>
+/// Quando a aba tem painéis congelados, a área de dados é dividida em até quatro
+/// quadrantes — canto, faixa superior, faixa esquerda e o principal — cada um
+/// desenhado com seu próprio recorte e sua própria origem de rolagem. O quadrante
+/// principal sempre existe; os outros três só quando há linha ou coluna congelada.
+/// </para>
 /// </summary>
 public sealed class SpreadsheetCanvas : Control
 {
+    /// <summary>Menor largura de coluna aceita no redimensionamento manual.</summary>
+    private const double MinColumnWidth = 20d;
+
+    /// <summary>Menor altura de linha aceita no redimensionamento manual.</summary>
+    private const double MinRowHeight = 8d;
+
+    /// <summary>Distância em pixels, de cada lado da borda, que ainda conta como "pegar a borda".</summary>
+    private const double ResizeHandleTolerance = 4d;
+
+    /// <summary>
+    /// Área mínima que o quadrante rolável mantém mesmo com muitas linhas ou colunas
+    /// congeladas, para o painel congelado nunca engolir a janela inteira.
+    /// </summary>
+    private const double MinScrollableExtent = 60d;
+
+    private static readonly Cursor DefaultCursor = new(StandardCursorType.Arrow);
+    private static readonly Cursor CellCursor = new(StandardCursorType.Cross);
+    private static readonly Cursor ColumnResizeCursor = new(StandardCursorType.SizeWestEast);
+    private static readonly Cursor RowResizeCursor = new(StandardCursorType.SizeNorthSouth);
+
     private readonly GridTheme _theme = GridTheme.Default;
     private readonly TextCache _textCache = new();
     private readonly CellFormatter _formatter = new();
@@ -51,11 +77,17 @@ public sealed class SpreadsheetCanvas : Control
     private double _scrollY;
     private bool _draggingSelection;
 
+    private int? _resizingColumn;
+    private double _resizeAnchorX;
+
+    private int? _resizingRow;
+    private double _resizeAnchorY;
+
     public SpreadsheetCanvas()
     {
         Focusable = true;
         ClipToBounds = true;
-        Cursor = new Cursor(StandardCursorType.Cross);
+        Cursor = CellCursor;
     }
 
     /// <summary>Disparado quando a rolagem muda por dentro, como na roda do mouse.</summary>
@@ -67,6 +99,9 @@ public sealed class SpreadsheetCanvas : Control
 
     /// <summary>Disparado quando o conteúdo da planilha muda por aqui, como no Delete.</summary>
     public event EventHandler? ContentChanged;
+
+    /// <summary>Disparado quando largura de coluna, altura de linha ou painéis congelados mudam.</summary>
+    public event EventHandler? LayoutChanged;
 
     /// <summary>Enter ou Tab chegando na grade enquanto o editor ainda não pegou o foco.</summary>
     public event EventHandler<NavigationDirection>? CommitRequested;
@@ -109,13 +144,13 @@ public sealed class SpreadsheetCanvas : Control
     public double ScrollX
     {
         get => _scrollX;
-        set => SetScroll(ref _scrollX, value);
+        set => SetScrollX(value);
     }
 
     public double ScrollY
     {
         get => _scrollY;
-        set => SetScroll(ref _scrollY, value);
+        set => SetScrollY(value);
     }
 
     /// <summary>Largura da área de dados, já sem o cabeçalho de linhas.</summary>
@@ -133,6 +168,12 @@ public sealed class SpreadsheetCanvas : Control
     public Cell ActiveCell =>
         ResolveGeometry()?.Sheet.GetCell(Selection.Active) ?? Cell.Empty;
 
+    /// <summary>Menor posição horizontal de rolagem permitida — o fim da faixa de colunas congeladas.</summary>
+    public double MinScrollX => ResolveGeometry() is { } geometry ? FrozenWidth(geometry) : 0d;
+
+    /// <summary>Menor posição vertical de rolagem permitida — o fim da faixa de linhas congeladas.</summary>
+    public double MinScrollY => ResolveGeometry() is { } geometry ? FrozenHeight(geometry) : 0d;
+
     /// <summary>Tamanho total rolável da aba atual.</summary>
     public (double Width, double Height) GetScrollExtent()
     {
@@ -148,7 +189,15 @@ public sealed class SpreadsheetCanvas : Control
     {
         SheetGeometry? geometry = ResolveGeometry();
 
-        return geometry is null ? null : CellRect(geometry, address.Row, address.Column);
+        if (geometry is null)
+        {
+            return null;
+        }
+
+        double scrollX = address.Column < geometry.Sheet.FrozenColumns ? 0d : ScrollableOffsetX(geometry);
+        double scrollY = address.Row < geometry.Sheet.FrozenRows ? 0d : ScrollableOffsetY(geometry);
+
+        return CellRect(geometry, address.Row, address.Column, scrollX, scrollY);
     }
 
     /// <summary>Avisa que o conteúdo mudou e a grade precisa ser redesenhada.</summary>
@@ -157,6 +206,127 @@ public sealed class SpreadsheetCanvas : Control
         _geometry?.Synchronize();
         InvalidateVisual();
     }
+
+    /// <summary>
+    /// Atualiza o nome guardado quando a aba exibida é renomeada por fora (pela
+    /// faixa de abas), sem resetar seleção nem rolagem — a <see cref="Worksheet"/>
+    /// por trás continua sendo o mesmo objeto, só o rótulo mudou. Sem isso, a
+    /// busca por <c>_sheetName</c> antigo no <see cref="Workbook"/> falharia e a
+    /// grade pararia de desenhar.
+    /// </summary>
+    public void NotifySheetRenamed(string oldName, string newName)
+    {
+        if (!string.Equals(_sheetName, oldName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _sheetName = newName;
+        InvalidateVisual();
+    }
+
+    // ------------------------------------------------------------ painéis congelados
+
+    /// <summary>
+    /// Congela as linhas acima e as colunas à esquerda da célula ativa, como o
+    /// comando "Congelar Painéis" do Excel a partir da seleção.
+    /// </summary>
+    public void FreezeAtSelection()
+    {
+        SheetGeometry? geometry = ResolveGeometry();
+
+        if (geometry is null)
+        {
+            return;
+        }
+
+        geometry.Sheet.FrozenRows = Selection.Active.Row;
+        geometry.Sheet.FrozenColumns = Selection.Active.Column;
+
+        ClampScrollToFrozenBounds(geometry);
+        NotifyLayoutChanged();
+    }
+
+    /// <summary>Congela só a primeira linha, mantendo as colunas congeladas como estavam.</summary>
+    public void FreezeTopRow()
+    {
+        SheetGeometry? geometry = ResolveGeometry();
+
+        if (geometry is null)
+        {
+            return;
+        }
+
+        geometry.Sheet.FrozenRows = 1;
+
+        ClampScrollToFrozenBounds(geometry);
+        NotifyLayoutChanged();
+    }
+
+    /// <summary>Congela só a primeira coluna, mantendo as linhas congeladas como estavam.</summary>
+    public void FreezeFirstColumn()
+    {
+        SheetGeometry? geometry = ResolveGeometry();
+
+        if (geometry is null)
+        {
+            return;
+        }
+
+        geometry.Sheet.FrozenColumns = 1;
+
+        ClampScrollToFrozenBounds(geometry);
+        NotifyLayoutChanged();
+    }
+
+    public void UnfreezePanes()
+    {
+        SheetGeometry? geometry = ResolveGeometry();
+
+        if (geometry is null)
+        {
+            return;
+        }
+
+        geometry.Sheet.FrozenRows = 0;
+        geometry.Sheet.FrozenColumns = 0;
+
+        NotifyLayoutChanged();
+    }
+
+    public bool HasFrozenPanes => ResolveGeometry() is { } geometry &&
+                                   (geometry.Sheet.FrozenRows > 0 || geometry.Sheet.FrozenColumns > 0);
+
+    private void NotifyLayoutChanged()
+    {
+        _geometry?.Synchronize();
+        InvalidateVisual();
+        LayoutChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ClampScrollToFrozenBounds(SheetGeometry geometry)
+    {
+        double minX = FrozenWidth(geometry);
+        double minY = FrozenHeight(geometry);
+
+        if (_scrollX < minX)
+        {
+            _scrollX = minX;
+        }
+
+        if (_scrollY < minY)
+        {
+            _scrollY = minY;
+        }
+    }
+
+    /// <summary>Largura ocupada pelas colunas congeladas, com uma folga mínima para a área rolável.</summary>
+    private double FrozenWidth(SheetGeometry geometry) =>
+        FrozenPaneMath.FrozenExtent(geometry.Columns, geometry.Sheet.FrozenColumns, ViewportWidth, MinScrollableExtent);
+
+    /// <summary>Altura ocupada pelas linhas congeladas, com uma folga mínima para a área rolável.</summary>
+    private double FrozenHeight(SheetGeometry geometry) =>
+        FrozenPaneMath.FrozenExtent(geometry.Rows, geometry.Sheet.FrozenRows, ViewportHeight, MinScrollableExtent);
 
     /// <summary>Rola o necessário para a célula ficar inteira dentro da janela.</summary>
     public void ScrollIntoView(CellAddress address)
@@ -168,30 +338,43 @@ public sealed class SpreadsheetCanvas : Control
             return;
         }
 
-        double left = geometry.Columns.OffsetOf(address.Column);
-        double right = left + geometry.Columns.SizeOf(address.Column);
-        double top = geometry.Rows.OffsetOf(address.Row);
-        double bottom = top + geometry.Rows.SizeOf(address.Row);
+        double frozenWidth = FrozenWidth(geometry);
+        double frozenHeight = FrozenHeight(geometry);
 
         double x = _scrollX;
         double y = _scrollY;
 
-        if (left < x)
+        // Célula dentro do painel congelado: sempre visível, não precisa rolar.
+        if (address.Column >= geometry.Sheet.FrozenColumns)
         {
-            x = left;
-        }
-        else if (right > x + ViewportWidth)
-        {
-            x = right - ViewportWidth;
+            double left = geometry.Columns.OffsetOf(address.Column);
+            double right = left + geometry.Columns.SizeOf(address.Column);
+            double scrollableWidth = ViewportWidth - frozenWidth;
+
+            if (left < x)
+            {
+                x = left;
+            }
+            else if (right > x + scrollableWidth)
+            {
+                x = right - scrollableWidth;
+            }
         }
 
-        if (top < y)
+        if (address.Row >= geometry.Sheet.FrozenRows)
         {
-            y = top;
-        }
-        else if (bottom > y + ViewportHeight)
-        {
-            y = bottom - ViewportHeight;
+            double top = geometry.Rows.OffsetOf(address.Row);
+            double bottom = top + geometry.Rows.SizeOf(address.Row);
+            double scrollableHeight = ViewportHeight - frozenHeight;
+
+            if (top < y)
+            {
+                y = top;
+            }
+            else if (bottom > y + scrollableHeight)
+            {
+                y = bottom - scrollableHeight;
+            }
         }
 
         if (Math.Abs(x - _scrollX) < 0.01d && Math.Abs(y - _scrollY) < 0.01d)
@@ -199,8 +382,8 @@ public sealed class SpreadsheetCanvas : Control
             return;
         }
 
-        _scrollX = Math.Max(0d, x);
-        _scrollY = Math.Max(0d, y);
+        _scrollX = Math.Max(frozenWidth, x);
+        _scrollY = Math.Max(frozenHeight, y);
 
         InvalidateVisual();
         ScrollChanged?.Invoke(this, EventArgs.Empty);
@@ -225,8 +408,8 @@ public sealed class SpreadsheetCanvas : Control
             return new SpreadsheetHit(SpreadsheetHitKind.Corner, CellAddress.Origin);
         }
 
-        int column = geometry.Columns.IndexAt(point.X - _theme.RowHeaderWidth + _scrollX);
-        int row = geometry.Rows.IndexAt(point.Y - _theme.ColumnHeaderHeight + _scrollY);
+        int column = geometry.Columns.IndexAt(ToSheetX(geometry, point.X));
+        int row = geometry.Rows.IndexAt(ToSheetY(geometry, point.Y));
 
         if (inColumnHeader)
         {
@@ -241,6 +424,92 @@ public sealed class SpreadsheetCanvas : Control
         return new SpreadsheetHit(SpreadsheetHitKind.Cell, new CellAddress(row, column));
     }
 
+    /// <summary>Converte a coordenada X da tela para o espaço de deslocamento da planilha (o de <see cref="AxisMetrics.OffsetOf"/>).</summary>
+    private double ToSheetX(SheetGeometry geometry, double screenX)
+    {
+        double localX = screenX - _theme.RowHeaderWidth;
+        double frozenWidth = FrozenWidth(geometry);
+
+        return localX < frozenWidth ? localX : localX + FrozenPaneMath.ScrollableOffset(_scrollX, frozenWidth);
+    }
+
+    /// <summary>Converte a coordenada Y da tela para o espaço de deslocamento da planilha.</summary>
+    private double ToSheetY(SheetGeometry geometry, double screenY)
+    {
+        double localY = screenY - _theme.ColumnHeaderHeight;
+        double frozenHeight = FrozenHeight(geometry);
+
+        return localY < frozenHeight ? localY : localY + FrozenPaneMath.ScrollableOffset(_scrollY, frozenHeight);
+    }
+
+    /// <summary>
+    /// Deslocamento de rolagem a usar no eixo X do quadrante rolável.
+    /// <para>
+    /// <c>_scrollX</c> vive no espaço de deslocamento absoluto da planilha (o mesmo
+    /// de <see cref="AxisMetrics.OffsetOf"/>) — é o que <see cref="ScrollIntoView"/> e
+    /// o mínimo de rolagem esperam. Já <see cref="ColumnLeft"/> soma a origem do
+    /// quadrante rolável (que começa depois do painel congelado); sem subtrair a
+    /// largura congelada aqui, esse trecho seria contado duas vezes e o conteúdo
+    /// apareceria deslocado para a esquerda do recorte do quadrante.
+    /// </para>
+    /// </summary>
+    private double ScrollableOffsetX(SheetGeometry geometry) => FrozenPaneMath.ScrollableOffset(_scrollX, FrozenWidth(geometry));
+
+    /// <inheritdoc cref="ScrollableOffsetX"/>
+    private double ScrollableOffsetY(SheetGeometry geometry) => FrozenPaneMath.ScrollableOffset(_scrollY, FrozenHeight(geometry));
+
+    /// <summary>Coluna cuja borda (esquerda ou direita) está sob o ponto, ou <c>null</c>.</summary>
+    private int? HitTestColumnBorder(SheetGeometry geometry, Point point)
+    {
+        if (point.Y >= _theme.ColumnHeaderHeight || point.X < _theme.RowHeaderWidth)
+        {
+            return null;
+        }
+
+        double sheetX = ToSheetX(geometry, point.X);
+        int column = geometry.Columns.IndexAt(sheetX);
+        double left = geometry.Columns.OffsetOf(column);
+        double right = left + geometry.Columns.SizeOf(column);
+
+        if (Math.Abs(sheetX - right) <= ResizeHandleTolerance)
+        {
+            return column;
+        }
+
+        if (column > 0 && Math.Abs(sheetX - left) <= ResizeHandleTolerance)
+        {
+            return column - 1;
+        }
+
+        return null;
+    }
+
+    /// <summary>Linha cuja borda (superior ou inferior) está sob o ponto, ou <c>null</c>.</summary>
+    private int? HitTestRowBorder(SheetGeometry geometry, Point point)
+    {
+        if (point.X >= _theme.RowHeaderWidth || point.Y < _theme.ColumnHeaderHeight)
+        {
+            return null;
+        }
+
+        double sheetY = ToSheetY(geometry, point.Y);
+        int row = geometry.Rows.IndexAt(sheetY);
+        double top = geometry.Rows.OffsetOf(row);
+        double bottom = top + geometry.Rows.SizeOf(row);
+
+        if (Math.Abs(sheetY - bottom) <= ResizeHandleTolerance)
+        {
+            return row;
+        }
+
+        if (row > 0 && Math.Abs(sheetY - top) <= ResizeHandleTolerance)
+        {
+            return row - 1;
+        }
+
+        return null;
+    }
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
@@ -250,6 +519,45 @@ public sealed class SpreadsheetCanvas : Control
 
         if (!point.Properties.IsLeftButtonPressed)
         {
+            return;
+        }
+
+        SheetGeometry? geometry = ResolveGeometry();
+
+        if (geometry is null)
+        {
+            return;
+        }
+
+        if (e.ClickCount == 2 && HitTestColumnBorder(geometry, point.Position) is int columnToFit)
+        {
+            AutoFitColumn(geometry, columnToFit);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ClickCount == 2 && HitTestRowBorder(geometry, point.Position) is int rowToFit)
+        {
+            AutoFitRow(geometry, rowToFit);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ClickCount == 1 && HitTestColumnBorder(geometry, point.Position) is int columnToResize)
+        {
+            _resizingColumn = columnToResize;
+            _resizeAnchorX = geometry.Columns.OffsetOf(columnToResize);
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.ClickCount == 1 && HitTestRowBorder(geometry, point.Position) is int rowToResize)
+        {
+            _resizingRow = rowToResize;
+            _resizeAnchorY = geometry.Rows.OffsetOf(rowToResize);
+            e.Pointer.Capture(this);
+            e.Handled = true;
             return;
         }
 
@@ -307,25 +615,88 @@ public sealed class SpreadsheetCanvas : Control
     {
         base.OnPointerMoved(e);
 
-        if (!_draggingSelection)
+        Point position = e.GetPosition(this);
+        SheetGeometry? geometry = ResolveGeometry();
+
+        if (geometry is null)
         {
             return;
         }
 
-        SpreadsheetHit hit = HitTest(e.GetPosition(this));
-
-        if (!hit.IsCell)
+        if (_resizingColumn is int resizingColumn)
         {
+            double sheetX = ToSheetX(geometry, position.X);
+            double width = Math.Max(MinColumnWidth, sheetX - _resizeAnchorX);
+
+            geometry.Sheet.SetColumnWidth(resizingColumn, width);
+            Refresh();
             return;
         }
 
-        Selection.ExtendTo(hit.Address);
-        NotifySelection();
+        if (_resizingRow is int resizingRow)
+        {
+            double sheetY = ToSheetY(geometry, position.Y);
+            double height = Math.Max(MinRowHeight, sheetY - _resizeAnchorY);
+
+            geometry.Sheet.SetRowHeight(resizingRow, height);
+            Refresh();
+            return;
+        }
+
+        if (_draggingSelection)
+        {
+            SpreadsheetHit hit = HitTest(position);
+
+            if (hit.IsCell)
+            {
+                Selection.ExtendTo(hit.Address);
+                NotifySelection();
+            }
+
+            return;
+        }
+
+        UpdateHoverCursor(geometry, position);
+    }
+
+    private void UpdateHoverCursor(SheetGeometry geometry, Point position)
+    {
+        if (HitTestColumnBorder(geometry, position) is not null)
+        {
+            Cursor = ColumnResizeCursor;
+            return;
+        }
+
+        if (HitTestRowBorder(geometry, position) is not null)
+        {
+            Cursor = RowResizeCursor;
+            return;
+        }
+
+        SpreadsheetHit hit = HitTest(position);
+
+        Cursor = hit.Kind is SpreadsheetHitKind.Cell ? CellCursor : DefaultCursor;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+
+        if (_resizingColumn is not null)
+        {
+            _resizingColumn = null;
+            e.Pointer.Capture(null);
+            LayoutChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (_resizingRow is not null)
+        {
+            _resizingRow = null;
+            e.Pointer.Capture(null);
+            LayoutChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
 
         if (!_draggingSelection)
         {
@@ -334,6 +705,84 @@ public sealed class SpreadsheetCanvas : Control
 
         _draggingSelection = false;
         e.Pointer.Capture(null);
+    }
+
+    /// <summary>Ajusta a largura da coluna ao maior texto que ela contém.</summary>
+    private void AutoFitColumn(SheetGeometry geometry, int column)
+    {
+        double widest = 0d;
+
+        foreach ((CellAddress address, Cell cell) in geometry.Sheet.Cells)
+        {
+            if (address.Column != column)
+            {
+                continue;
+            }
+
+            FormattedValue formatted = _formatter.Format(cell);
+
+            if (formatted.Text.Length == 0)
+            {
+                continue;
+            }
+
+            FormattedText text = _textCache.Get(
+                formatted.Text,
+                cell.Style.FontFamily,
+                cell.Style.FontSize,
+                cell.Style.Bold,
+                cell.Style.Italic,
+                Colors.Black);
+
+            widest = Math.Max(widest, text.Width);
+        }
+
+        double newWidth = widest <= 0d
+            ? Worksheet.DefaultColumnWidth
+            : widest + (_theme.CellPadding * 2d) + 2d;
+
+        geometry.Sheet.SetColumnWidth(column, Math.Max(MinColumnWidth, newWidth));
+        Refresh();
+        LayoutChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Ajusta a altura da linha ao maior texto que ela contém.</summary>
+    private void AutoFitRow(SheetGeometry geometry, int row)
+    {
+        double tallest = 0d;
+
+        foreach ((CellAddress address, Cell cell) in geometry.Sheet.Cells)
+        {
+            if (address.Row != row)
+            {
+                continue;
+            }
+
+            FormattedValue formatted = _formatter.Format(cell);
+
+            if (formatted.Text.Length == 0)
+            {
+                continue;
+            }
+
+            FormattedText text = _textCache.Get(
+                formatted.Text,
+                cell.Style.FontFamily,
+                cell.Style.FontSize,
+                cell.Style.Bold,
+                cell.Style.Italic,
+                Colors.Black);
+
+            tallest = Math.Max(tallest, text.Height);
+        }
+
+        double newHeight = tallest <= 0d
+            ? Worksheet.DefaultRowHeight
+            : tallest + 6d;
+
+        geometry.Sheet.SetRowHeight(row, Math.Max(MinRowHeight, newHeight));
+        Refresh();
+        LayoutChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -354,8 +803,8 @@ public sealed class SpreadsheetCanvas : Control
         (double extentWidth, double extentHeight) =
             geometry.GetScrollExtent(_scrollX, _scrollY, ViewportWidth, ViewportHeight);
 
-        ScrollY = Math.Clamp(ScrollY - (e.Delta.Y * verticalStep), 0d, Math.Max(0d, extentHeight - ViewportHeight));
-        ScrollX = Math.Clamp(ScrollX - (e.Delta.X * horizontalStep), 0d, Math.Max(0d, extentWidth - ViewportWidth));
+        ScrollY = Math.Clamp(ScrollY - (e.Delta.Y * verticalStep), MinScrollY, Math.Max(MinScrollY, extentHeight - ViewportHeight));
+        ScrollX = Math.Clamp(ScrollX - (e.Delta.X * horizontalStep), MinScrollX, Math.Max(MinScrollX, extentWidth - ViewportWidth));
 
         ScrollChanged?.Invoke(this, EventArgs.Empty);
         e.Handled = true;
@@ -572,16 +1021,31 @@ public sealed class SpreadsheetCanvas : Control
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private void SetScroll(ref double field, double value)
+    private void SetScrollX(double value)
     {
-        double clamped = Math.Max(0d, value);
+        double minimum = ResolveGeometry() is { } geometry ? FrozenWidth(geometry) : 0d;
+        double clamped = Math.Max(minimum, value);
 
-        if (Math.Abs(clamped - field) < 0.01d)
+        if (Math.Abs(clamped - _scrollX) < 0.01d)
         {
             return;
         }
 
-        field = clamped;
+        _scrollX = clamped;
+        InvalidateVisual();
+    }
+
+    private void SetScrollY(double value)
+    {
+        double minimum = ResolveGeometry() is { } geometry ? FrozenHeight(geometry) : 0d;
+        double clamped = Math.Max(minimum, value);
+
+        if (Math.Abs(clamped - _scrollY) < 0.01d)
+        {
+            return;
+        }
+
+        _scrollY = clamped;
         InvalidateVisual();
     }
 
@@ -603,31 +1067,142 @@ public sealed class SpreadsheetCanvas : Control
 
         geometry.Synchronize();
 
-        var dataArea = new Rect(
-            _theme.RowHeaderWidth,
-            _theme.ColumnHeaderHeight,
-            ViewportWidth,
-            ViewportHeight);
+        int frozenRows = geometry.Sheet.FrozenRows;
+        int frozenColumns = geometry.Sheet.FrozenColumns;
+        double frozenWidth = FrozenWidth(geometry);
+        double frozenHeight = FrozenHeight(geometry);
 
-        VisibleRange range = geometry.GetVisibleRange(_scrollX, _scrollY, ViewportWidth, ViewportHeight);
+        double mainOriginX = _theme.RowHeaderWidth + frozenWidth;
+        double mainOriginY = _theme.ColumnHeaderHeight + frozenHeight;
+        double mainWidth = Math.Max(0d, ViewportWidth - frozenWidth);
+        double mainHeight = Math.Max(0d, ViewportHeight - frozenHeight);
 
-        using (context.PushClip(dataArea))
+        VisibleRange mainRange = geometry.GetVisibleRange(_scrollX, _scrollY, mainWidth, mainHeight);
+
+        double scrollableX = ScrollableOffsetX(geometry);
+        double scrollableY = ScrollableOffsetY(geometry);
+
+        // O quadrante principal (linhas e colunas roláveis) sempre existe.
+        DrawQuadrant(
+            context, geometry,
+            new Rect(mainOriginX, mainOriginY, mainWidth, mainHeight),
+            mainRange, scrollableX, scrollableY);
+
+        if (frozenRows > 0)
         {
-            context.FillRectangle(_theme.CellBackground, dataArea);
-            DrawFills(context, geometry, range);
-            DrawSelectionFill(context, geometry, range);
-            DrawGridLines(context, geometry, range);
-            DrawContents(context, geometry, range);
-            DrawBorders(context, geometry, range);
-            DrawSelectionOutline(context, geometry);
+            var topRange = new VisibleRange(0, frozenRows - 1, mainRange.FirstColumn, mainRange.LastColumn);
+
+            DrawQuadrant(
+                context, geometry,
+                new Rect(mainOriginX, _theme.ColumnHeaderHeight, mainWidth, frozenHeight),
+                topRange, scrollableX, 0d);
         }
 
-        DrawColumnHeaders(context, geometry, range);
-        DrawRowHeaders(context, geometry, range);
+        if (frozenColumns > 0)
+        {
+            var leftRange = new VisibleRange(mainRange.FirstRow, mainRange.LastRow, 0, frozenColumns - 1);
+
+            DrawQuadrant(
+                context, geometry,
+                new Rect(_theme.RowHeaderWidth, mainOriginY, frozenWidth, mainHeight),
+                leftRange, 0d, scrollableY);
+        }
+
+        if (frozenRows > 0 && frozenColumns > 0)
+        {
+            var cornerRange = new VisibleRange(0, frozenRows - 1, 0, frozenColumns - 1);
+
+            DrawQuadrant(
+                context, geometry,
+                new Rect(_theme.RowHeaderWidth, _theme.ColumnHeaderHeight, frozenWidth, frozenHeight),
+                cornerRange, 0d, 0d);
+        }
+
+        DrawFreezeDividers(context, frozenWidth, frozenHeight);
+
+        DrawColumnHeaderBand(
+            context, geometry,
+            new Rect(mainOriginX, 0d, mainWidth, _theme.ColumnHeaderHeight),
+            mainRange.FirstColumn, mainRange.LastColumn, scrollableX);
+
+        if (frozenColumns > 0)
+        {
+            DrawColumnHeaderBand(
+                context, geometry,
+                new Rect(_theme.RowHeaderWidth, 0d, frozenWidth, _theme.ColumnHeaderHeight),
+                0, frozenColumns - 1, 0d);
+        }
+
+        DrawRowHeaderBand(
+            context, geometry,
+            new Rect(0d, mainOriginY, _theme.RowHeaderWidth, mainHeight),
+            mainRange.FirstRow, mainRange.LastRow, scrollableY);
+
+        if (frozenRows > 0)
+        {
+            DrawRowHeaderBand(
+                context, geometry,
+                new Rect(0d, _theme.ColumnHeaderHeight, _theme.RowHeaderWidth, frozenHeight),
+                0, frozenRows - 1, 0d);
+        }
+
         DrawCorner(context);
     }
 
-    private void DrawFills(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawQuadrant(
+        DrawingContext context,
+        SheetGeometry geometry,
+        Rect clip,
+        VisibleRange range,
+        double scrollX,
+        double scrollY)
+    {
+        if (clip.Width <= 0d || clip.Height <= 0d || range.RowCount <= 0 || range.ColumnCount <= 0)
+        {
+            return;
+        }
+
+        using (context.PushClip(clip))
+        {
+            context.FillRectangle(_theme.CellBackground, clip);
+            DrawFills(context, geometry, range, scrollX, scrollY);
+            DrawSelectionFill(context, geometry, range, scrollX, scrollY);
+            DrawGridLines(context, geometry, range, clip, scrollX, scrollY);
+            DrawContents(context, geometry, range, scrollX, scrollY);
+            DrawBorders(context, geometry, range, scrollX, scrollY);
+            DrawSelectionOutline(context, geometry, scrollX, scrollY);
+        }
+    }
+
+    /// <summary>
+    /// Linha de destaque entre o painel congelado e a área rolável — mais forte que
+    /// a grade normal, para não deixar dúvida de onde a rolagem para de mexer.
+    /// </summary>
+    private void DrawFreezeDividers(DrawingContext context, double frozenWidth, double frozenHeight)
+    {
+        if (frozenWidth <= 0d && frozenHeight <= 0d)
+        {
+            return;
+        }
+
+        var pen = new Pen(new SolidColorBrush(Color.FromRgb(150, 150, 150)).ToImmutable(), 1.5);
+
+        if (frozenWidth > 0d)
+        {
+            double x = Snap(_theme.RowHeaderWidth + frozenWidth);
+
+            context.DrawLine(pen, new Point(x, 0d), new Point(x, Bounds.Height));
+        }
+
+        if (frozenHeight > 0d)
+        {
+            double y = Snap(_theme.ColumnHeaderHeight + frozenHeight);
+
+            context.DrawLine(pen, new Point(0d, y), new Point(Bounds.Width, y));
+        }
+    }
+
+    private void DrawFills(DrawingContext context, SheetGeometry geometry, VisibleRange range, double scrollX, double scrollY)
     {
         Worksheet sheet = geometry.Sheet;
 
@@ -644,12 +1219,12 @@ public sealed class SpreadsheetCanvas : Control
 
                 context.FillRectangle(
                     new SolidColorBrush(ToColor(background.Value)).ToImmutable(),
-                    CellRect(geometry, row, column));
+                    CellRect(geometry, row, column, scrollX, scrollY));
             }
         }
     }
 
-    private void DrawSelectionFill(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawSelectionFill(DrawingContext context, SheetGeometry geometry, VisibleRange range, double scrollX, double scrollY)
     {
         if (Selection.IsSingleCell)
         {
@@ -673,17 +1248,17 @@ public sealed class SpreadsheetCanvas : Control
                     continue;
                 }
 
-                context.FillRectangle(_theme.SelectionFill, CellRect(geometry, row, column));
+                context.FillRectangle(_theme.SelectionFill, CellRect(geometry, row, column, scrollX, scrollY));
             }
         }
     }
 
-    private void DrawSelectionOutline(DrawingContext context, SheetGeometry geometry)
+    private void DrawSelectionOutline(DrawingContext context, SheetGeometry geometry, double scrollX, double scrollY)
     {
         CellRange selected = Selection.Range;
 
-        Rect start = CellRect(geometry, selected.Start.Row, selected.Start.Column);
-        Rect end = CellRect(geometry, selected.End.Row, selected.End.Column);
+        Rect start = CellRect(geometry, selected.Start.Row, selected.Start.Column, scrollX, scrollY);
+        Rect end = CellRect(geometry, selected.End.Row, selected.End.Column, scrollX, scrollY);
 
         var outline = new Rect(start.X, start.Y, end.Right - start.X, end.Bottom - start.Y);
 
@@ -691,41 +1266,37 @@ public sealed class SpreadsheetCanvas : Control
 
         if (!Selection.IsSingleCell)
         {
-            context.DrawRectangle(null, _theme.GridLine, CellRect(geometry, Selection.Active.Row, Selection.Active.Column));
+            context.DrawRectangle(
+                null,
+                _theme.GridLine,
+                CellRect(geometry, Selection.Active.Row, Selection.Active.Column, scrollX, scrollY));
         }
     }
 
-    private void DrawGridLines(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawGridLines(
+        DrawingContext context,
+        SheetGeometry geometry,
+        VisibleRange range,
+        Rect clip,
+        double scrollX,
+        double scrollY)
     {
-        double right = _theme.RowHeaderWidth + ViewportWidth;
-        double bottom = _theme.ColumnHeaderHeight + ViewportHeight;
-
         for (int column = range.FirstColumn; column <= range.LastColumn + 1; column++)
         {
-            double x = Snap(ColumnLeft(geometry, column));
+            double x = Snap(ColumnLeft(geometry, column, scrollX));
 
-            if (x < _theme.RowHeaderWidth || x > right)
-            {
-                continue;
-            }
-
-            context.DrawLine(_theme.GridLine, new Point(x, _theme.ColumnHeaderHeight), new Point(x, bottom));
+            context.DrawLine(_theme.GridLine, new Point(x, clip.Top), new Point(x, clip.Bottom));
         }
 
         for (int row = range.FirstRow; row <= range.LastRow + 1; row++)
         {
-            double y = Snap(RowTop(geometry, row));
+            double y = Snap(RowTop(geometry, row, scrollY));
 
-            if (y < _theme.ColumnHeaderHeight || y > bottom)
-            {
-                continue;
-            }
-
-            context.DrawLine(_theme.GridLine, new Point(_theme.RowHeaderWidth, y), new Point(right, y));
+            context.DrawLine(_theme.GridLine, new Point(clip.Left, y), new Point(clip.Right, y));
         }
     }
 
-    private void DrawContents(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawContents(DrawingContext context, SheetGeometry geometry, VisibleRange range, double scrollX, double scrollY)
     {
         Worksheet sheet = geometry.Sheet;
 
@@ -741,7 +1312,7 @@ public sealed class SpreadsheetCanvas : Control
                     continue;
                 }
 
-                DrawCellText(context, geometry, sheet, address, cell, range);
+                DrawCellText(context, geometry, sheet, address, cell, range, scrollX, scrollY);
             }
         }
     }
@@ -752,7 +1323,9 @@ public sealed class SpreadsheetCanvas : Control
         Worksheet sheet,
         CellAddress address,
         Cell cell,
-        VisibleRange range)
+        VisibleRange range,
+        double scrollX,
+        double scrollY)
     {
         FormattedValue formatted = _formatter.Format(cell);
 
@@ -776,7 +1349,7 @@ public sealed class SpreadsheetCanvas : Control
             cell.Style.Italic,
             ToColor(color));
 
-        Rect cellRect = CellRect(geometry, address.Row, address.Column);
+        Rect cellRect = CellRect(geometry, address.Row, address.Column, scrollX, scrollY);
         double available = cellRect.Width - (_theme.CellPadding * 2d);
 
         CoreHorizontalAlignment alignment = ResolveAlignment(cell);
@@ -800,7 +1373,7 @@ public sealed class SpreadsheetCanvas : Control
         // Texto maior que a célula transborda para as vizinhas vazias, como no Excel.
         if (text.Width > available && !cell.Value.IsNumber && alignment is CoreHorizontalAlignment.Left)
         {
-            clip = ExtendOverEmptyNeighbours(geometry, sheet, address, cellRect, text.Width, range);
+            clip = ExtendOverEmptyNeighbours(geometry, sheet, address, cellRect, text.Width, range, scrollX, scrollY);
         }
 
         double x = alignment switch
@@ -829,7 +1402,9 @@ public sealed class SpreadsheetCanvas : Control
         CellAddress address,
         Rect cellRect,
         double needed,
-        VisibleRange range)
+        VisibleRange range,
+        double scrollX,
+        double scrollY)
     {
         double width = cellRect.Width;
         int column = address.Column + 1;
@@ -850,7 +1425,7 @@ public sealed class SpreadsheetCanvas : Control
         return cellRect.WithWidth(width);
     }
 
-    private void DrawBorders(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawBorders(DrawingContext context, SheetGeometry geometry, VisibleRange range, double scrollX, double scrollY)
     {
         Worksheet sheet = geometry.Sheet;
 
@@ -865,7 +1440,7 @@ public sealed class SpreadsheetCanvas : Control
                     continue;
                 }
 
-                Rect rect = CellRect(geometry, row, column);
+                Rect rect = CellRect(geometry, row, column, scrollX, scrollY);
 
                 DrawEdge(context, borders.Top, rect.TopLeft, rect.TopRight);
                 DrawEdge(context, borders.Bottom, rect.BottomLeft, rect.BottomRight);
@@ -908,18 +1483,28 @@ public sealed class SpreadsheetCanvas : Control
 
     // ------------------------------------------------------------ cabeçalhos
 
-    private void DrawColumnHeaders(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawColumnHeaderBand(
+        DrawingContext context,
+        SheetGeometry geometry,
+        Rect band,
+        int firstColumn,
+        int lastColumn,
+        double scrollX)
     {
-        var header = new Rect(_theme.RowHeaderWidth, 0d, ViewportWidth, _theme.ColumnHeaderHeight);
+        if (band.Width <= 0d)
+        {
+            return;
+        }
+
         CellRange selected = Selection.Range;
 
-        using (context.PushClip(header))
+        using (context.PushClip(band))
         {
-            context.FillRectangle(_theme.HeaderBackground, header);
+            context.FillRectangle(_theme.HeaderBackground, band);
 
-            for (int column = range.FirstColumn; column <= range.LastColumn; column++)
+            for (int column = firstColumn; column <= lastColumn; column++)
             {
-                double left = ColumnLeft(geometry, column);
+                double left = ColumnLeft(geometry, column, scrollX);
                 double width = geometry.Columns.SizeOf(column);
 
                 bool highlighted = column >= selected.Start.Column && column <= selected.End.Column;
@@ -928,36 +1513,46 @@ public sealed class SpreadsheetCanvas : Control
                 {
                     context.FillRectangle(
                         _theme.HeaderSelectedBackground,
-                        new Rect(left, 0d, width, _theme.ColumnHeaderHeight));
+                        new Rect(left, band.Y, width, _theme.ColumnHeaderHeight));
                 }
 
                 FormattedText text = HeaderText(CellAddress.ColumnToName(column), highlighted);
 
                 context.DrawText(text, new Point(
                     left + ((width - text.Width) / 2d),
-                    (_theme.ColumnHeaderHeight - text.Height) / 2d));
+                    band.Y + ((_theme.ColumnHeaderHeight - text.Height) / 2d)));
 
                 double edge = Snap(left + width);
-                context.DrawLine(_theme.HeaderLine, new Point(edge, 0d), new Point(edge, _theme.ColumnHeaderHeight));
+                context.DrawLine(_theme.HeaderLine, new Point(edge, band.Top), new Point(edge, band.Bottom));
             }
 
-            double bottom = Snap(_theme.ColumnHeaderHeight);
-            context.DrawLine(_theme.HeaderLine, new Point(header.X, bottom), new Point(header.Right, bottom));
+            double bottom = Snap(band.Bottom);
+            context.DrawLine(_theme.HeaderLine, new Point(band.Left, bottom), new Point(band.Right, bottom));
         }
     }
 
-    private void DrawRowHeaders(DrawingContext context, SheetGeometry geometry, VisibleRange range)
+    private void DrawRowHeaderBand(
+        DrawingContext context,
+        SheetGeometry geometry,
+        Rect band,
+        int firstRow,
+        int lastRow,
+        double scrollY)
     {
-        var header = new Rect(0d, _theme.ColumnHeaderHeight, _theme.RowHeaderWidth, ViewportHeight);
+        if (band.Height <= 0d)
+        {
+            return;
+        }
+
         CellRange selected = Selection.Range;
 
-        using (context.PushClip(header))
+        using (context.PushClip(band))
         {
-            context.FillRectangle(_theme.HeaderBackground, header);
+            context.FillRectangle(_theme.HeaderBackground, band);
 
-            for (int row = range.FirstRow; row <= range.LastRow; row++)
+            for (int row = firstRow; row <= lastRow; row++)
             {
-                double top = RowTop(geometry, row);
+                double top = RowTop(geometry, row, scrollY);
                 double height = geometry.Rows.SizeOf(row);
 
                 bool highlighted = row >= selected.Start.Row && row <= selected.End.Row;
@@ -966,7 +1561,7 @@ public sealed class SpreadsheetCanvas : Control
                 {
                     context.FillRectangle(
                         _theme.HeaderSelectedBackground,
-                        new Rect(0d, top, _theme.RowHeaderWidth, height));
+                        new Rect(band.X, top, _theme.RowHeaderWidth, height));
                 }
 
                 FormattedText text = HeaderText(
@@ -978,11 +1573,11 @@ public sealed class SpreadsheetCanvas : Control
                     top + ((height - text.Height) / 2d)));
 
                 double edge = Snap(top + height);
-                context.DrawLine(_theme.HeaderLine, new Point(0d, edge), new Point(_theme.RowHeaderWidth, edge));
+                context.DrawLine(_theme.HeaderLine, new Point(band.Left, edge), new Point(band.Right, edge));
             }
 
-            double right = Snap(_theme.RowHeaderWidth);
-            context.DrawLine(_theme.HeaderLine, new Point(right, header.Y), new Point(right, header.Bottom));
+            double right = Snap(band.Right);
+            context.DrawLine(_theme.HeaderLine, new Point(right, band.Top), new Point(right, band.Bottom));
         }
     }
 
@@ -1033,15 +1628,15 @@ public sealed class SpreadsheetCanvas : Control
         return _geometry;
     }
 
-    private double ColumnLeft(SheetGeometry geometry, int column) =>
-        _theme.RowHeaderWidth + geometry.Columns.OffsetOf(column) - _scrollX;
+    private double ColumnLeft(SheetGeometry geometry, int column, double scrollX) =>
+        _theme.RowHeaderWidth + geometry.Columns.OffsetOf(column) - scrollX;
 
-    private double RowTop(SheetGeometry geometry, int row) =>
-        _theme.ColumnHeaderHeight + geometry.Rows.OffsetOf(row) - _scrollY;
+    private double RowTop(SheetGeometry geometry, int row, double scrollY) =>
+        _theme.ColumnHeaderHeight + geometry.Rows.OffsetOf(row) - scrollY;
 
-    private Rect CellRect(SheetGeometry geometry, int row, int column) => new(
-        ColumnLeft(geometry, column),
-        RowTop(geometry, row),
+    private Rect CellRect(SheetGeometry geometry, int row, int column, double scrollX, double scrollY) => new(
+        ColumnLeft(geometry, column, scrollX),
+        RowTop(geometry, row, scrollY),
         geometry.Columns.SizeOf(column),
         geometry.Rows.SizeOf(row));
 

@@ -73,6 +73,7 @@ public sealed class SpreadsheetView : UserControl
         _canvas.ContentChanged += (_, _) => RaiseChanged();
         _canvas.CommitRequested += (_, direction) => Commit(direction);
         _canvas.CancelRequested += (_, _) => CancelEdit();
+        _canvas.LayoutChanged += (_, _) => SyncScrollBars();
 
         _vertical.Scroll += OnVerticalScroll;
         _horizontal.Scroll += OnHorizontalScroll;
@@ -144,6 +145,9 @@ public sealed class SpreadsheetView : UserControl
 
     public void FocusGrid() => _canvas.Focus();
 
+    /// <inheritdoc cref="SpreadsheetCanvas.NotifySheetRenamed"/>
+    public void NotifySheetRenamed(string oldName, string newName) => _canvas.NotifySheetRenamed(oldName, newName);
+
     public void Refresh()
     {
         _canvas.Refresh();
@@ -156,6 +160,35 @@ public sealed class SpreadsheetView : UserControl
         Write(_canvas.Selection.Active, text);
         MoveAfterCommit(NavigationDirection.Down);
         RaiseChanged();
+    }
+
+    // ------------------------------------------------------ painéis congelados
+
+    public bool HasFrozenPanes => _canvas.HasFrozenPanes;
+
+    /// <summary>Congela as linhas acima e as colunas à esquerda da célula ativa.</summary>
+    public void FreezeAtSelection()
+    {
+        _canvas.FreezeAtSelection();
+        FocusGrid();
+    }
+
+    public void FreezeTopRow()
+    {
+        _canvas.FreezeTopRow();
+        FocusGrid();
+    }
+
+    public void FreezeFirstColumn()
+    {
+        _canvas.FreezeFirstColumn();
+        FocusGrid();
+    }
+
+    public void UnfreezePanes()
+    {
+        _canvas.UnfreezePanes();
+        FocusGrid();
     }
 
     // -------------------------------------------------------------- edição
@@ -411,8 +444,10 @@ public sealed class SpreadsheetView : UserControl
 
         try
         {
-            Configure(_vertical, extentHeight, _canvas.ViewportHeight, _canvas.ScrollY);
-            Configure(_horizontal, extentWidth, _canvas.ViewportWidth, _canvas.ScrollX);
+            // Com painel congelado, a barra não rola de volta o suficiente para
+            // reexibir o que já está sempre visível no painel fixo.
+            Configure(_vertical, _canvas.MinScrollY, extentHeight, _canvas.ViewportHeight, _canvas.ScrollY);
+            Configure(_horizontal, _canvas.MinScrollX, extentWidth, _canvas.ViewportWidth, _canvas.ScrollX);
         }
         finally
         {
@@ -420,16 +455,16 @@ public sealed class SpreadsheetView : UserControl
         }
     }
 
-    private static void Configure(ScrollBar bar, double extent, double viewport, double value)
+    private static void Configure(ScrollBar bar, double minimum, double extent, double viewport, double value)
     {
-        double maximum = Math.Max(0d, extent - viewport);
+        double maximum = Math.Max(minimum, extent - viewport);
 
-        bar.Minimum = 0d;
+        bar.Minimum = minimum;
         bar.Maximum = maximum;
         bar.ViewportSize = viewport;
         bar.LargeChange = Math.Max(viewport, 1d);
         bar.SmallChange = 20d;
-        bar.Value = Math.Clamp(value, 0d, maximum);
-        bar.IsEnabled = maximum > 0d;
+        bar.Value = Math.Clamp(value, minimum, maximum);
+        bar.IsEnabled = maximum > minimum;
     }
 }

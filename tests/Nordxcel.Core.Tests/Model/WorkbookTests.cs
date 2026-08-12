@@ -111,4 +111,64 @@ public class WorkbookTests
         Assert.Equal(["Sensibilidade", "Premissas", "DCF"], workbook.Worksheets.Select(s => s.Name));
         Assert.Throws<ArgumentOutOfRangeException>(() => workbook.MoveWorksheet("DCF", 3));
     }
+
+    [Fact]
+    public void CreateUniqueWorksheetName_ComecaEmUm()
+    {
+        var workbook = new Workbook();
+
+        Assert.Equal("Planilha1", workbook.CreateUniqueWorksheetName());
+    }
+
+    [Fact]
+    public void CreateUniqueWorksheetName_PulaOsNomesJaUsados()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("Planilha1");
+        workbook.AddWorksheet("Planilha2");
+
+        Assert.Equal("Planilha3", workbook.CreateUniqueWorksheetName());
+    }
+
+    [Fact]
+    public void CreateUniqueWorksheetName_FuncionaMesmoComBuracoNaSequencia()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("Planilha1");
+        workbook.AddWorksheet("Planilha3");
+
+        // Planilha2 está livre, mesmo com Planilha3 já existindo.
+        Assert.Equal("Planilha2", workbook.CreateUniqueWorksheetName());
+    }
+
+    [Fact]
+    public void CreateUniqueWorksheetName_IgnoraNomesQueNaoSeguemOPadrao()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("DCF");
+        workbook.AddWorksheet("Premissas");
+
+        Assert.Equal("Planilha1", workbook.CreateUniqueWorksheetName());
+    }
+
+    [Fact]
+    public void CreateUniqueWorksheetName_AceitaPrefixoCustomizado()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("Cenário1");
+
+        Assert.Equal("Cenário2", workbook.CreateUniqueWorksheetName("Cenário"));
+    }
+
+    [Fact]
+    public void AddWorksheet_SemNomeGeraUmAutomatico()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("Planilha1");
+
+        Worksheet added = workbook.AddWorksheet();
+
+        Assert.Equal("Planilha2", added.Name);
+        Assert.Equal(2, workbook.Worksheets.Count);
+    }
 }

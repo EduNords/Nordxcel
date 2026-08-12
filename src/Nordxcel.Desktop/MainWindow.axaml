@@ -10,7 +10,17 @@
         WindowStartupLocation="CenterScreen">
 
     <DockPanel>
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_Exibir">
+                <MenuItem Header="Congelar Painéis" Click="OnFreezePanes" />
+                <MenuItem Header="Congelar Linha Superior" Click="OnFreezeTopRow" />
+                <MenuItem Header="Congelar Primeira Coluna" Click="OnFreezeFirstColumn" />
+                <Separator />
+                <MenuItem Header="Descongelar Painéis" Click="OnUnfreezePanes" />
+            </MenuItem>
+        </Menu>
         <controls:FormulaBar x:Name="Formulas" DockPanel.Dock="Top" />
+        <controls:SheetTabStrip x:Name="Tabs" DockPanel.Dock="Bottom" />
         <controls:SpreadsheetView x:Name="Sheet" />
     </DockPanel>
 
