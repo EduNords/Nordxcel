@@ -30,6 +30,19 @@ public sealed class GridTheme
     /// <summary>Fundo da área além do fim da planilha.</summary>
     public IBrush OutsideBackground { get; } = new SolidColorBrush(Color.FromRgb(250, 250, 250)).ToImmutable();
 
+    /// <summary>Verde do Excel, usado no contorno da seleção.</summary>
+    public Color SelectionColor { get; } = Color.FromRgb(33, 115, 70);
+
+    /// <summary>Preenchimento translúcido do intervalo selecionado.</summary>
+    public IBrush SelectionFill { get; } = new SolidColorBrush(Color.FromArgb(28, 33, 115, 70)).ToImmutable();
+
+    public IPen SelectionBorder { get; } =
+        new Pen(new SolidColorBrush(Color.FromRgb(33, 115, 70)).ToImmutable(), 2).ToImmutable();
+
+    public IBrush HeaderSelectedBackground { get; } = new SolidColorBrush(Color.FromRgb(217, 231, 223)).ToImmutable();
+
+    public IBrush HeaderSelectedForeground { get; } = new SolidColorBrush(Color.FromRgb(20, 70, 43)).ToImmutable();
+
     public double ColumnHeaderHeight { get; } = 22d;
 
     public double RowHeaderWidth { get; } = 46d;

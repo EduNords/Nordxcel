@@ -31,6 +31,12 @@ public sealed class NumberFormat
     /// <summary>Quantidade de seções declaradas, de 1 a 4.</summary>
     public int SectionCount => _sections.Length;
 
+    /// <summary>Verdadeiro quando a máscara representa uma data.</summary>
+    public bool IsDate => _sections[0].IsDate;
+
+    /// <summary>Verdadeiro quando a máscara mostra o número como porcentagem.</summary>
+    public bool IsPercent => _sections[0].PercentScale > 0;
+
     public static NumberFormat Parse(string mask)
     {
         ArgumentNullException.ThrowIfNull(mask);

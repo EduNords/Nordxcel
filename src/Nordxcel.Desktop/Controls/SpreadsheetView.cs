@@ -2,28 +2,83 @@ using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
 using Nordxcel.Core.Calculation;
+using Nordxcel.Core.Editing;
+using Nordxcel.Core.Layout;
+using Nordxcel.Core.Model;
+
+// O Avalonia tem um NavigationDirection próprio, para foco entre controles.
+using NavigationDirection = Nordxcel.Core.Layout.NavigationDirection;
 
 namespace Nordxcel.Desktop.Controls;
 
 /// <summary>
-/// A planilha com as barras de rolagem. A rolagem é em pixels, e não em células
-/// inteiras, para o movimento ficar contínuo como o do Excel moderno.
+/// A planilha completa: grade, barras de rolagem e o editor que aparece por cima
+/// da célula durante a digitação.
 /// </summary>
 public sealed class SpreadsheetView : UserControl
 {
     private readonly SpreadsheetCanvas _canvas = new();
     private readonly ScrollBar _vertical = new() { Orientation = Orientation.Vertical };
     private readonly ScrollBar _horizontal = new() { Orientation = Orientation.Horizontal };
+    private readonly TextBox _editor;
+    private readonly Panel _surface = new();
 
     private bool _syncing;
+    private bool _editing;
+    private bool _editStartedByTyping;
+
+    /// <summary>Só depois que o editor recebe o foco é que perder o foco significa confirmar.</summary>
+    private bool _editorHasFocus;
+
+    private CellAddress _editingAddress;
 
     public SpreadsheetView()
     {
+        _editor = new TextBox
+        {
+            IsVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            AcceptsReturn = false,
+            BorderThickness = new Thickness(2),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(33, 115, 70)).ToImmutable(),
+            Background = Brushes.White,
+            Padding = new Thickness(2, 0, 2, 0),
+            FontFamily = new FontFamily("Calibri, Segoe UI, sans-serif"),
+            FontSize = 11,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+
+        _editor.KeyDown += OnEditorKeyDown;
+        _editor.GotFocus += (_, _) => _editorHasFocus = true;
+        _editor.LostFocus += (_, _) =>
+        {
+            if (!_editorHasFocus)
+            {
+                return;
+            }
+
+            _editorHasFocus = false;
+            Commit(NavigationDirection.Down, moveAfterCommit: false);
+        };
+
+        _canvas.ScrollChanged += (_, _) => SyncScrollBars();
+        _canvas.SelectionChanged += OnCanvasSelectionChanged;
+        _canvas.EditRequested += OnEditRequested;
+        _canvas.ContentChanged += (_, _) => RaiseChanged();
+        _canvas.CommitRequested += (_, direction) => Commit(direction);
+        _canvas.CancelRequested += (_, _) => CancelEdit();
+
         _vertical.Scroll += OnVerticalScroll;
         _horizontal.Scroll += OnHorizontalScroll;
-        _canvas.ScrollChanged += (_, _) => SyncScrollBars();
+
+        _surface.Children.Add(_canvas);
+        _surface.Children.Add(_editor);
 
         var layout = new Grid
         {
@@ -31,9 +86,9 @@ public sealed class SpreadsheetView : UserControl
             RowDefinitions = new RowDefinitions("*,Auto"),
         };
 
-        layout.Children.Add(_canvas);
-        Grid.SetRow(_canvas, 0);
-        Grid.SetColumn(_canvas, 0);
+        layout.Children.Add(_surface);
+        Grid.SetRow(_surface, 0);
+        Grid.SetColumn(_surface, 0);
 
         layout.Children.Add(_vertical);
         Grid.SetRow(_vertical, 0);
@@ -46,6 +101,14 @@ public sealed class SpreadsheetView : UserControl
         Content = layout;
     }
 
+    /// <summary>Disparado quando a seleção muda, para a barra de fórmulas acompanhar.</summary>
+    public event EventHandler? SelectionChanged;
+
+    /// <summary>Disparado quando o conteúdo da planilha muda.</summary>
+    public event EventHandler? ContentChanged;
+
+    public SpreadsheetCanvas Canvas => _canvas;
+
     public CalculationEngine? Engine
     {
         get => _canvas.Engine;
@@ -53,6 +116,7 @@ public sealed class SpreadsheetView : UserControl
         {
             _canvas.Engine = value;
             SyncScrollBars();
+            OnCanvasSelectionChanged(this, EventArgs.Empty);
         }
     }
 
@@ -61,21 +125,238 @@ public sealed class SpreadsheetView : UserControl
         get => _canvas.SheetName;
         set
         {
+            CancelEdit();
             _canvas.SheetName = value;
             _canvas.ScrollX = 0d;
             _canvas.ScrollY = 0d;
             SyncScrollBars();
+            OnCanvasSelectionChanged(this, EventArgs.Empty);
         }
     }
 
-    public SpreadsheetCanvas Canvas => _canvas;
+    public bool IsEditing => _editing;
 
-    /// <summary>Redesenha e reajusta as barras depois de o conteúdo mudar.</summary>
+    /// <summary>Referência da seleção, como aparece na caixa de nome: <c>B7</c> ou <c>B2:D10</c>.</summary>
+    public string SelectionReference => _canvas.Selection.ToReferenceText();
+
+    /// <summary>Conteúdo editável da célula ativa, do jeito que a barra de fórmulas mostra.</summary>
+    public string ActiveCellText => CellInput.ToEditText(_canvas.ActiveCell);
+
+    public void FocusGrid() => _canvas.Focus();
+
     public void Refresh()
     {
         _canvas.Refresh();
         SyncScrollBars();
     }
+
+    /// <summary>Grava um texto na célula ativa. É por onde a barra de fórmulas confirma.</summary>
+    public void CommitActiveCell(string text)
+    {
+        Write(_canvas.Selection.Active, text);
+        MoveAfterCommit(NavigationDirection.Down);
+        RaiseChanged();
+    }
+
+    // -------------------------------------------------------------- edição
+
+    private void OnEditRequested(object? sender, CellEditRequestedEventArgs e)
+    {
+        if (_editing)
+        {
+            // Tecla digitada antes de o editor pegar o foco: em vez de perdê-la,
+            // acrescenta ao que já está escrito.
+            if (e.InitialText is { Length: > 0 })
+            {
+                _editor.Text += e.InitialText;
+                _editor.CaretIndex = _editor.Text.Length;
+            }
+
+            return;
+        }
+
+        Rect? rect = _canvas.GetCellScreenRect(e.Address);
+
+        if (rect is null)
+        {
+            return;
+        }
+
+        _editing = true;
+        _canvas.IsEditing = true;
+        _editStartedByTyping = e.StartedByTyping;
+        _editingAddress = e.Address;
+
+        _editor.Text = e.InitialText ?? CellInput.ToEditText(_canvas.ActiveCell);
+
+        PositionEditor(rect.Value);
+        _editor.IsVisible = true;
+
+        // O foco precisa esperar o controle existir de fato na árvore visual. Pedir
+        // foco no mesmo passo em que ele fica visível não pega, e a tecla seguinte
+        // voltaria para a grade em vez de entrar no editor.
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (!_editing)
+                {
+                    return;
+                }
+
+                _editor.Focus();
+                _editor.CaretIndex = _editor.Text?.Length ?? 0;
+            },
+            DispatcherPriority.Input);
+    }
+
+    private void PositionEditor(Rect cell)
+    {
+        // A borda de 2px do editor cobre a célula por igual dos dois lados.
+        _editor.Margin = new Thickness(cell.X - 1d, cell.Y - 1d, 0d, 0d);
+        _editor.Width = Math.Max(cell.Width + 2d, 60d);
+        _editor.Height = cell.Height + 2d;
+    }
+
+    private void OnEditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Escape:
+                CancelEdit();
+                e.Handled = true;
+                break;
+
+            case Key.Enter:
+                Commit(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? NavigationDirection.Up : NavigationDirection.Down);
+                e.Handled = true;
+                break;
+
+            case Key.Tab:
+                Commit(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? NavigationDirection.Left : NavigationDirection.Right);
+                e.Handled = true;
+                break;
+
+            // Setas confirmam quando a edição começou por digitação; depois de F2 elas
+            // andam com o cursor dentro do texto. É exatamente a distinção do Excel.
+            case Key.Up when _editStartedByTyping:
+                Commit(NavigationDirection.Up);
+                e.Handled = true;
+                break;
+
+            case Key.Down when _editStartedByTyping:
+                Commit(NavigationDirection.Down);
+                e.Handled = true;
+                break;
+
+            case Key.Left when _editStartedByTyping:
+                Commit(NavigationDirection.Left);
+                e.Handled = true;
+                break;
+
+            case Key.Right when _editStartedByTyping:
+                Commit(NavigationDirection.Right);
+                e.Handled = true;
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    private void Commit(NavigationDirection direction, bool moveAfterCommit = true)
+    {
+        if (!_editing)
+        {
+            return;
+        }
+
+        string text = _editor.Text ?? string.Empty;
+
+        _editing = false;
+        _canvas.IsEditing = false;
+        _editorHasFocus = false;
+        _editor.IsVisible = false;
+
+        Write(_editingAddress, text);
+
+        if (moveAfterCommit)
+        {
+            MoveAfterCommit(direction);
+        }
+
+        _canvas.Focus();
+        RaiseChanged();
+    }
+
+    private void CancelEdit()
+    {
+        if (!_editing)
+        {
+            return;
+        }
+
+        _editing = false;
+        _canvas.IsEditing = false;
+        _editorHasFocus = false;
+        _editor.IsVisible = false;
+        _canvas.Focus();
+    }
+
+    private void Write(CellAddress address, string text)
+    {
+        CalculationEngine? engine = _canvas.Engine;
+
+        if (engine is null || string.IsNullOrEmpty(_canvas.SheetName))
+        {
+            return;
+        }
+
+        var location = new CellLocation(_canvas.SheetName, address);
+        Cell existing = engine.Workbook[_canvas.SheetName].GetCell(address);
+
+        try
+        {
+            engine.SetCell(location, CellInput.Parse(text, existing));
+        }
+        catch (Nordxcel.Core.Formulas.FormulaSyntaxException)
+        {
+            // Fórmula malformada não altera a planilha; guarda o texto como está para
+            // o usuário ver o que digitou e corrigir.
+            engine.SetCell(location, existing with { Formula = null, Value = CellValue.Text(text) });
+        }
+
+        _canvas.Refresh();
+    }
+
+    private void MoveAfterCommit(NavigationDirection direction)
+    {
+        CellAddress next = SelectionNavigator.Step(_canvas.Selection.Active, direction);
+
+        _canvas.Selection.MoveTo(next);
+        _canvas.ScrollIntoView(next);
+        _canvas.Refresh();
+
+        OnCanvasSelectionChanged(this, EventArgs.Empty);
+    }
+
+    private void RaiseChanged()
+    {
+        SyncScrollBars();
+        ContentChanged?.Invoke(this, EventArgs.Empty);
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnCanvasSelectionChanged(object? sender, EventArgs e)
+    {
+        if (_editing)
+        {
+            CancelEdit();
+        }
+
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // ------------------------------------------------------------- rolagem
 
     protected override Size ArrangeOverride(Size finalSize)
     {
@@ -93,6 +374,7 @@ public sealed class SpreadsheetView : UserControl
         }
 
         _canvas.ScrollY = _vertical.Value;
+        RepositionEditor();
     }
 
     private void OnHorizontalScroll(object? sender, ScrollEventArgs e)
@@ -103,6 +385,22 @@ public sealed class SpreadsheetView : UserControl
         }
 
         _canvas.ScrollX = _horizontal.Value;
+        RepositionEditor();
+    }
+
+    private void RepositionEditor()
+    {
+        if (!_editing)
+        {
+            return;
+        }
+
+        Rect? rect = _canvas.GetCellScreenRect(_editingAddress);
+
+        if (rect is not null)
+        {
+            PositionEditor(rect.Value);
+        }
     }
 
     private void SyncScrollBars()

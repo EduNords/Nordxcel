@@ -9,6 +9,9 @@
         Width="1280" Height="800"
         WindowStartupLocation="CenterScreen">
 
-    <controls:SpreadsheetView x:Name="Sheet" />
+    <DockPanel>
+        <controls:FormulaBar x:Name="Formulas" DockPanel.Dock="Top" />
+        <controls:SpreadsheetView x:Name="Sheet" />
+    </DockPanel>
 
 </Window>
