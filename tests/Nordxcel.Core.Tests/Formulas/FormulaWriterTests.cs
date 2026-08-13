@@ -165,6 +165,64 @@ public class FormulaWriterTests
         Assert.Equal("1.5+2.25", FormulaWriter.Write(tree, FormulaSyntax.EnUs));
     }
 
+    // ------------------------------------------------- sintaxe EnUs (exportação)
+
+    [Theory]
+    [InlineData("SOMA", "SUM")]
+    [InlineData("MÉDIA", "AVERAGE")]
+    [InlineData("MÍNIMO", "MIN")]
+    [InlineData("MÁXIMO", "MAX")]
+    [InlineData("CONT.VALORES", "COUNTA")]
+    [InlineData("SE", "IF")]
+    [InlineData("SEERRO", "IFERROR")]
+    [InlineData("E", "AND")]
+    [InlineData("OU", "OR")]
+    [InlineData("ARRED", "ROUND")]
+    [InlineData("ABS", "ABS")]
+    [InlineData("POTÊNCIA", "POWER")]
+    [InlineData("RAIZ", "SQRT")]
+    [InlineData("VPL", "NPV")]
+    [InlineData("TIR", "IRR")]
+    [InlineData("VF", "FV")]
+    [InlineData("TAXA", "RATE")]
+    public void EnUs_TraduzTodaFuncaoEmbutidaParaONomeDoExcelEmIngles(string portugues, string ingles)
+    {
+        FormulaNode tree = FormulaParser.ParseDefault($"{portugues}(A1)");
+
+        Assert.Equal($"{ingles}(A1)", FormulaWriter.Write(tree, FormulaSyntax.EnUs));
+    }
+
+    [Fact]
+    public void EnUs_FuncaoAninhadaUsaVirgulaEntreArgumentos() =>
+        Assert.Equal(
+            "IFERROR(AVERAGE(B2:B10),0)",
+            FormulaWriter.Write(FormulaParser.ParseDefault("SEERRO(MÉDIA(B2:B10);0)"), FormulaSyntax.EnUs));
+
+    [Fact]
+    public void EnUs_FuncaoDesconhecidaLancaEmVezDeVazarSemTraducao()
+    {
+        var chamada = new FunctionNode("PROCV", [new NumberNode(1)]);
+
+        Assert.Throws<NotSupportedException>(() => FormulaWriter.Write(chamada, FormulaSyntax.EnUs));
+    }
+
+    [Theory]
+    [InlineData("VERDADEIRO", "TRUE")]
+    [InlineData("FALSO", "FALSE")]
+    public void EnUs_TraduzLiteralLogico(string portugues, string ingles) =>
+        Assert.Equal(ingles, FormulaWriter.Write(FormulaParser.ParseDefault(portugues), FormulaSyntax.EnUs));
+
+    [Theory]
+    [InlineData("#DIV/0!", "#DIV/0!")]
+    [InlineData("#VALOR!", "#VALUE!")]
+    [InlineData("#REF!", "#REF!")]
+    [InlineData("#NOME?", "#NAME?")]
+    [InlineData("#NÚM!", "#NUM!")]
+    [InlineData("#N/D", "#N/A")]
+    [InlineData("#NULO!", "#NULL!")]
+    public void EnUs_TraduzTokenDeErro(string portugues, string ingles) =>
+        Assert.Equal(ingles, FormulaWriter.Write(FormulaParser.ParseDefault(portugues), FormulaSyntax.EnUs));
+
     // -------------------------------------------------------- fórmula de DCF
 
     [Fact]

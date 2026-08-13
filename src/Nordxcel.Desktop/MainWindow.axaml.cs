@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Nordxcel.Core.Calculation;
+using Nordxcel.Core.Export;
 using Nordxcel.Core.Model;
 using Nordxcel.Core.Persistence;
 using Nordxcel.Desktop.Controls;
@@ -17,6 +18,7 @@ namespace Nordxcel.Desktop;
 public partial class MainWindow : Window
 {
     private static readonly FilePickerFileType NordxcelFileType = new("Nordxcel") { Patterns = ["*.nxcl"] };
+    private static readonly FilePickerFileType XlsxFileType = new("Excel") { Patterns = ["*.xlsx"] };
 
     private CalculationEngine _engine = null!;
     private string? _currentFilePath;
@@ -534,6 +536,50 @@ public partial class MainWindow : Window
         });
 
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
+    // -------------------------------------------------- exportação para .xlsx
+
+    private async void OnExportXlsx(object? sender, RoutedEventArgs e) => await ExportXlsxAsync();
+
+    private async Task ExportXlsxAsync()
+    {
+        string? path = await PromptExportPathAsync();
+
+        if (path is null)
+        {
+            return;
+        }
+
+        try
+        {
+            XlsxExporter.Export(_engine.Workbook, path);
+        }
+        catch (XlsxExportException exception)
+        {
+            await MessageDialog.ShowAsync(this, "Não foi possível exportar", exception.Message, "OK");
+            return;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await MessageDialog.ShowAsync(this, "Não foi possível exportar", exception.Message, "OK");
+            return;
+        }
+
+        await MessageDialog.ShowAsync(this, "Exportação concluída", $"Modelo exportado para {Path.GetFileName(path)}.", "OK");
+    }
+
+    private async Task<string?> PromptExportPathAsync()
+    {
+        IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Exportar para .xlsx",
+            SuggestedFileName = _currentFilePath is null ? "Modelo" : Path.GetFileNameWithoutExtension(_currentFilePath),
+            DefaultExtension = "xlsx",
+            FileTypeChoices = [XlsxFileType],
+        });
+
+        return file?.TryGetLocalPath();
     }
 
     /// <summary>

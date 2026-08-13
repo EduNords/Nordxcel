@@ -17,6 +17,8 @@
                 <Separator />
                 <MenuItem Header="Salvar" InputGesture="Ctrl+S" Click="OnSave" />
                 <MenuItem Header="Salvar Como..." InputGesture="Ctrl+Shift+S" Click="OnSaveAs" />
+                <Separator />
+                <MenuItem Header="Exportar para .xlsx..." Click="OnExportXlsx" />
             </MenuItem>
             <MenuItem Header="_Editar">
                 <MenuItem x:Name="UndoMenuItem" Header="Desfazer" InputGesture="Ctrl+Z" Click="OnUndo" />

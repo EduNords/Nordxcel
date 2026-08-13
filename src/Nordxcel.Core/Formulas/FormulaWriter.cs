@@ -58,11 +58,11 @@ public static class FormulaWriter
                 break;
 
             case LogicalNode logical:
-                builder.Append(logical.Value ? "VERDADEIRO" : "FALSO");
+                builder.Append(logical.Value ? syntax.TrueLiteral : syntax.FalseLiteral);
                 break;
 
             case ErrorNode error:
-                builder.Append(error.Error.ToDisplayText());
+                builder.Append(ErrorText(error.Error, syntax));
                 break;
 
             case ReferenceNode reference:
@@ -131,7 +131,7 @@ public static class FormulaWriter
 
     private static void WriteFunction(StringBuilder builder, FunctionNode node, FormulaSyntax syntax)
     {
-        builder.Append(node.Name).Append('(');
+        builder.Append(TranslateFunctionName(node.Name, syntax)).Append('(');
 
         for (int i = 0; i < node.Arguments.Count; i++)
         {
@@ -145,6 +145,33 @@ public static class FormulaWriter
 
         builder.Append(')');
     }
+
+    /// <summary>
+    /// Traduz o nome da função para a sintaxe pedida. Uma sintaxe com tabela de
+    /// tradução (hoje, só <see cref="FormulaSyntax.EnUs"/>) precisa reconhecer
+    /// toda função embutida — função sem tradução cadastrada lança em vez de
+    /// vazar sem tradução, o que viraria <c>#NAME?</c> silencioso ao abrir o
+    /// <c>.xlsx</c> exportado num Excel de verdade.
+    /// </summary>
+    private static string TranslateFunctionName(string name, FormulaSyntax syntax)
+    {
+        if (syntax.FunctionNames is null)
+        {
+            return name;
+        }
+
+        if (syntax.FunctionNames.TryGetValue(name, out string? translated))
+        {
+            return translated;
+        }
+
+        throw new NotSupportedException($"Função '{name}' não tem nome equivalente cadastrado em '{nameof(FormulaSyntax.EnUs)}'.");
+    }
+
+    private static string ErrorText(CellErrorType error, FormulaSyntax syntax) =>
+        syntax.ErrorTokens is not null && syntax.ErrorTokens.TryGetValue(error, out string? text)
+            ? text
+            : error.ToDisplayText();
 
     /// <summary>Escreve um nó filho, envolvendo em parênteses se a precedência dele for baixa demais para o contexto.</summary>
     private static void WriteChild(StringBuilder builder, FormulaNode child, int minimumPrecedence, FormulaSyntax syntax)
