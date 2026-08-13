@@ -171,4 +171,35 @@ public class WorkbookTests
         Assert.Equal("Planilha2", added.Name);
         Assert.Equal(2, workbook.Worksheets.Count);
     }
+
+    [Fact]
+    public void Clone_CopiaTodasAsAbasNaMesmaOrdem()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("Premissas");
+        workbook["Premissas"].SetValue(CellAddress.Parse("B2"), CellValue.Number(8));
+        workbook.AddWorksheet("DCF");
+        workbook["DCF"].SetCell(CellAddress.Parse("A1"), Cell.FromFormula("Premissas!B2*2"));
+
+        Workbook clone = workbook.Clone();
+
+        Assert.Equal(["Premissas", "DCF"], clone.Worksheets.Select(s => s.Name));
+        Assert.Equal(8d, clone["Premissas"].GetValue(CellAddress.Parse("B2")).AsNumber());
+        Assert.Equal("Premissas!B2*2", clone["DCF"].GetCell(CellAddress.Parse("A1")).Formula);
+    }
+
+    [Fact]
+    public void Clone_EIndependenteDoOriginal()
+    {
+        var workbook = new Workbook();
+        workbook.AddWorksheet("Planilha1");
+        workbook["Planilha1"].SetValue(CellAddress.Parse("A1"), CellValue.Number(1));
+
+        Workbook clone = workbook.Clone();
+        clone["Planilha1"].SetValue(CellAddress.Parse("A1"), CellValue.Number(999));
+        clone.AddWorksheet("SóNaCópia");
+
+        Assert.Equal(1d, workbook["Planilha1"].GetValue(CellAddress.Parse("A1")).AsNumber());
+        Assert.False(workbook.ContainsWorksheet("SóNaCópia"));
+    }
 }

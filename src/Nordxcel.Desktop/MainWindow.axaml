@@ -33,6 +33,10 @@
                 <Separator />
                 <MenuItem Header="Descongelar Painéis" Click="OnUnfreezePanes" />
             </MenuItem>
+            <MenuItem Header="_Dados">
+                <MenuItem Header="Tabela de Dados (1 Variável)..." Click="OnDataTableOneVariable" />
+                <MenuItem Header="Tabela de Dados (2 Variáveis)..." Click="OnDataTableTwoVariables" />
+            </MenuItem>
         </Menu>
         <controls:FormattingToolbar x:Name="Toolbar" DockPanel.Dock="Top" />
         <controls:FormulaBar x:Name="Formulas" DockPanel.Dock="Top" />

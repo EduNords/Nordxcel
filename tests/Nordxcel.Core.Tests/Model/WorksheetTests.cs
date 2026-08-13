@@ -140,4 +140,37 @@ public class WorksheetTests
     [InlineData("'Premissas")]
     public void Construtor_RecusaNomesInvalidos(string name) =>
         Assert.ThrowsAny<ArgumentException>(() => new Worksheet(name));
+
+    [Fact]
+    public void Clone_CopiaCelulasDimensoesEPaineisCongelados()
+    {
+        var sheet = new Worksheet("DCF") { FrozenRows = 1, FrozenColumns = 2 };
+        sheet.SetCell(B2, Cell.FromNumber(42));
+        sheet.SetColumnWidth(1, 220);
+        sheet.SetRowHeight(3, 32);
+
+        Worksheet clone = sheet.Clone();
+
+        Assert.Equal("DCF", clone.Name);
+        Assert.Equal(1, clone.FrozenRows);
+        Assert.Equal(2, clone.FrozenColumns);
+        Assert.Equal(CellValue.Number(42), clone.GetValue(B2));
+        Assert.Equal(220, clone.GetColumnWidth(1));
+        Assert.Equal(32, clone.GetRowHeight(3));
+    }
+
+    [Fact]
+    public void Clone_EIndependenteDoOriginal()
+    {
+        var sheet = new Worksheet("DCF");
+        sheet.SetCell(B2, Cell.FromNumber(1));
+
+        Worksheet clone = sheet.Clone();
+        clone.SetCell(B2, Cell.FromNumber(999));
+        clone.SetCell(CellAddress.Parse("C3"), Cell.FromNumber(7));
+
+        Assert.Equal(CellValue.Number(1), sheet.GetValue(B2));
+        Assert.Equal(0, sheet.GetValue(CellAddress.Parse("C3")).AsNumber());
+        Assert.Equal(1, sheet.CellCount);
+    }
 }

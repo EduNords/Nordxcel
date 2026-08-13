@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -128,6 +130,276 @@ public partial class MainWindow : Window
     private void OnFreezeFirstColumn(object? sender, RoutedEventArgs e) => Sheet.FreezeFirstColumn();
 
     private void OnUnfreezePanes(object? sender, RoutedEventArgs e) => Sheet.UnfreezePanes();
+
+    // ------------------------------------------------------- tabela de dados
+
+    private async void OnDataTableOneVariable(object? sender, RoutedEventArgs e) => await RunDataTableOneVariableAsync();
+
+    private async void OnDataTableTwoVariables(object? sender, RoutedEventArgs e) => await RunDataTableTwoVariablesAsync();
+
+    private async Task RunDataTableOneVariableAsync()
+    {
+        if (!TryGetOneVariableLayout(out CellAddress[] valueAddresses, out CellAddress[] resultAddresses, out string layoutError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", layoutError, "OK");
+            return;
+        }
+
+        string[]? input = await TextInputDialog.ShowAsync(
+            this,
+            "Tabela de Dados (1 Variável)",
+            $"{valueAddresses.Length} valor(es) selecionado(s). Cada um substitui a célula de entrada, " +
+            "recalcula o modelo e grava o resultado ao lado.",
+            "Célula de entrada (ex.: Premissas!B2)",
+            "Célula de saída (ex.: DCF!B10)");
+
+        if (input is null)
+        {
+            return;
+        }
+
+        if (!TryResolveCell(input[0], out CellLocation inputCell, out string inputError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", inputError, "OK");
+            return;
+        }
+
+        if (!TryResolveCell(input[1], out CellLocation outputCell, out string outputError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", outputError, "OK");
+            return;
+        }
+
+        Worksheet sheet = _engine.Workbook[Sheet.SheetName];
+        List<CellValue> values = valueAddresses.Select(sheet.GetValue).ToList();
+
+        IReadOnlyList<CellValue> results = DataTableEngine.EvaluateSingleVariable(
+            _engine.Workbook, inputCell, outputCell, values);
+
+        var written = new Dictionary<CellAddress, CellValue>();
+
+        for (int i = 0; i < resultAddresses.Length; i++)
+        {
+            written[resultAddresses[i]] = results[i];
+        }
+
+        Sheet.ApplyDataTableResults("Tabela de Dados", written);
+    }
+
+    private async Task RunDataTableTwoVariablesAsync()
+    {
+        if (!TryGetTwoVariableLayout(
+                out CellAddress[] horizontalHeaderAddresses,
+                out CellAddress[] verticalHeaderAddresses,
+                out (CellAddress Address, int Row, int Column)[] interior,
+                out string layoutError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", layoutError, "OK");
+            return;
+        }
+
+        string[]? input = await TextInputDialog.ShowAsync(
+            this,
+            "Tabela de Dados (2 Variáveis)",
+            $"{verticalHeaderAddresses.Length} valor(es) na primeira coluna, {horizontalHeaderAddresses.Length} na primeira linha da seleção.",
+            "Célula de entrada para os valores da coluna à esquerda",
+            "Célula de entrada para os valores da linha de cima",
+            "Célula de saída (ex.: DCF!B10)");
+
+        if (input is null)
+        {
+            return;
+        }
+
+        if (!TryResolveCell(input[0], out CellLocation verticalInputCell, out string verticalError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", verticalError, "OK");
+            return;
+        }
+
+        if (!TryResolveCell(input[1], out CellLocation horizontalInputCell, out string horizontalError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", horizontalError, "OK");
+            return;
+        }
+
+        if (!TryResolveCell(input[2], out CellLocation outputCell, out string outputError))
+        {
+            await MessageDialog.ShowAsync(this, "Tabela de Dados", outputError, "OK");
+            return;
+        }
+
+        Worksheet sheet = _engine.Workbook[Sheet.SheetName];
+        List<CellValue> verticalValues = verticalHeaderAddresses.Select(sheet.GetValue).ToList();
+        List<CellValue> horizontalValues = horizontalHeaderAddresses.Select(sheet.GetValue).ToList();
+
+        CellValue[,] results = DataTableEngine.EvaluateTwoVariable(
+            _engine.Workbook,
+            verticalInputCell, verticalValues,
+            horizontalInputCell, horizontalValues,
+            outputCell);
+
+        var written = new Dictionary<CellAddress, CellValue>();
+
+        foreach ((CellAddress address, int row, int column) in interior)
+        {
+            written[address] = results[row, column];
+        }
+
+        Sheet.ApplyDataTableResults("Tabela de Dados", written);
+    }
+
+    /// <summary>
+    /// Aceita seleção de exatamente 2 colunas (valores à esquerda, resultado à
+    /// direita, uma linha por valor) ou exatamente 2 linhas (valores em cima,
+    /// resultado embaixo, uma coluna por valor). Colunas tem prioridade quando os
+    /// dois se aplicam, como numa seleção 2×2.
+    /// </summary>
+    private bool TryGetOneVariableLayout(out CellAddress[] valueAddresses, out CellAddress[] resultAddresses, out string error)
+    {
+        CellRange range = Sheet.SelectionRange;
+        error = string.Empty;
+
+        // Clique num cabeçalho de coluna/linha seleciona a planilha inteira num
+        // eixo (mais de um milhão de células) — sem essa guarda, "2 colunas" ou
+        // "2 linhas" bateria certo e a Tabela de Dados tentaria materializar
+        // e recalcular um valor por linha/coluna da planilha inteira.
+        if (IsUnboundedSelection(range))
+        {
+            valueAddresses = [];
+            resultAddresses = [];
+            error = "A seleção não pode ser uma coluna ou linha inteira. Selecione só o intervalo com os valores.";
+            return false;
+        }
+
+        if (range.ColumnCount == 2)
+        {
+            valueAddresses = new CellAddress[range.RowCount];
+            resultAddresses = new CellAddress[range.RowCount];
+
+            for (int i = 0; i < range.RowCount; i++)
+            {
+                int row = range.Start.Row + i;
+                valueAddresses[i] = new CellAddress(row, range.Start.Column);
+                resultAddresses[i] = new CellAddress(row, range.Start.Column + 1);
+            }
+
+            return true;
+        }
+
+        if (range.RowCount == 2)
+        {
+            valueAddresses = new CellAddress[range.ColumnCount];
+            resultAddresses = new CellAddress[range.ColumnCount];
+
+            for (int i = 0; i < range.ColumnCount; i++)
+            {
+                int column = range.Start.Column + i;
+                valueAddresses[i] = new CellAddress(range.Start.Row, column);
+                resultAddresses[i] = new CellAddress(range.Start.Row + 1, column);
+            }
+
+            return true;
+        }
+
+        valueAddresses = [];
+        resultAddresses = [];
+        error = "Selecione um intervalo com exatamente 2 colunas (valores à esquerda, resultado à direita) " +
+                "ou exatamente 2 linhas (valores em cima, resultado embaixo) antes de abrir a Tabela de Dados.";
+        return false;
+    }
+
+    /// <summary>
+    /// Aceita seleção retangular com pelo menos 2 linhas e 2 colunas: a primeira
+    /// linha (menos o canto) tem os valores horizontais, a primeira coluna (menos
+    /// o canto) tem os valores verticais, e o interior recebe o resultado.
+    /// </summary>
+    private bool TryGetTwoVariableLayout(
+        out CellAddress[] horizontalHeaderAddresses,
+        out CellAddress[] verticalHeaderAddresses,
+        out (CellAddress Address, int Row, int Column)[] interior,
+        out string error)
+    {
+        CellRange range = Sheet.SelectionRange;
+        error = string.Empty;
+
+        if (IsUnboundedSelection(range))
+        {
+            horizontalHeaderAddresses = [];
+            verticalHeaderAddresses = [];
+            interior = [];
+            error = "A seleção não pode ser uma coluna ou linha inteira. Selecione só o intervalo da tabela.";
+            return false;
+        }
+
+        if (range.ColumnCount < 2 || range.RowCount < 2)
+        {
+            horizontalHeaderAddresses = [];
+            verticalHeaderAddresses = [];
+            interior = [];
+            error = "Selecione um intervalo retangular com pelo menos 2 linhas e 2 colunas: valores da linha de cima " +
+                    "na primeira linha, valores da coluna à esquerda na primeira coluna, e o resultado no interior.";
+            return false;
+        }
+
+        int columnCount = range.ColumnCount - 1;
+        int rowCount = range.RowCount - 1;
+
+        horizontalHeaderAddresses = new CellAddress[columnCount];
+
+        for (int c = 0; c < columnCount; c++)
+        {
+            horizontalHeaderAddresses[c] = new CellAddress(range.Start.Row, range.Start.Column + 1 + c);
+        }
+
+        verticalHeaderAddresses = new CellAddress[rowCount];
+
+        for (int r = 0; r < rowCount; r++)
+        {
+            verticalHeaderAddresses[r] = new CellAddress(range.Start.Row + 1 + r, range.Start.Column);
+        }
+
+        interior = new (CellAddress, int, int)[rowCount * columnCount];
+        int index = 0;
+
+        for (int r = 0; r < rowCount; r++)
+        {
+            for (int c = 0; c < columnCount; c++)
+            {
+                interior[index++] = (new CellAddress(range.Start.Row + 1 + r, range.Start.Column + 1 + c), r, c);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Verdadeiro para seleção de coluna ou linha inteira — mesmo teste que <see cref="Nordxcel.Core.Editing.RangeEditing"/> usa para não materializar a planilha inteira.</summary>
+    private static bool IsUnboundedSelection(CellRange range) =>
+        range.RowCount >= CellAddress.MaxRows || range.ColumnCount >= CellAddress.MaxColumns;
+
+    /// <summary>Interpreta uma referência de célula digitada no diálogo, usando a aba ativa quando nenhuma é indicada.</summary>
+    private bool TryResolveCell(string text, out CellLocation location, out string error)
+    {
+        location = default;
+        error = string.Empty;
+
+        if (!CellReference.TryParse(text, out CellReference reference))
+        {
+            error = $"'{text}' não é uma referência de célula válida (ex.: B2 ou Premissas!B2).";
+            return false;
+        }
+
+        string sheetName = reference.Sheet ?? Sheet.SheetName;
+
+        if (!_engine.Workbook.ContainsWorksheet(sheetName))
+        {
+            error = $"A aba '{sheetName}' não existe.";
+            return false;
+        }
+
+        location = new CellLocation(sheetName, reference.Address);
+        return true;
+    }
 
     private void OnUndo(object? sender, RoutedEventArgs e)
     {

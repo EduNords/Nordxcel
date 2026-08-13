@@ -156,6 +156,38 @@ public sealed class Worksheet
         return new CellRange(new CellAddress(minRow, minColumn), new CellAddress(maxRow, maxColumn));
     }
 
+    /// <summary>
+    /// Cópia independente da aba. <see cref="Cell"/> é imutável, então basta copiar
+    /// as entradas do dicionário — não há nada por baixo para clonar de verdade.
+    /// É o que sustenta a Tabela de Dados: calcular sobre uma cópia sem tocar a
+    /// planilha real.
+    /// </summary>
+    public Worksheet Clone()
+    {
+        var clone = new Worksheet(Name)
+        {
+            FrozenRows = FrozenRows,
+            FrozenColumns = FrozenColumns,
+        };
+
+        foreach ((int column, double width) in _columnWidths)
+        {
+            clone._columnWidths[column] = width;
+        }
+
+        foreach ((int row, double height) in _rowHeights)
+        {
+            clone._rowHeights[row] = height;
+        }
+
+        foreach ((CellAddress address, Cell cell) in _cells)
+        {
+            clone._cells[address] = cell;
+        }
+
+        return clone;
+    }
+
     /// <summary>Aplica as regras de nome de aba do Excel, que a exportação para .xlsx exige.</summary>
     internal static string ValidateName(string name)
     {

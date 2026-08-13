@@ -120,6 +120,25 @@ public sealed class Workbook
         _byName[validated] = worksheet;
     }
 
+    /// <summary>
+    /// Cópia independente da pasta inteira, abas e células — nada nela é
+    /// compartilhado com o original. Usado pela Tabela de Dados para recalcular o
+    /// modelo com premissas substituídas sem afetar o que o usuário vê na tela.
+    /// </summary>
+    public Workbook Clone()
+    {
+        var clone = new Workbook();
+
+        foreach (Worksheet sheet in _worksheets)
+        {
+            Worksheet sheetClone = sheet.Clone();
+            clone._worksheets.Add(sheetClone);
+            clone._byName.Add(sheetClone.Name, sheetClone);
+        }
+
+        return clone;
+    }
+
     /// <summary>Move a aba para outra posição na barra de abas.</summary>
     public void MoveWorksheet(string name, int newIndex)
     {

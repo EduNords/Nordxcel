@@ -155,6 +155,9 @@ public sealed class SpreadsheetView : UserControl
     /// <summary>Referência da seleção, como aparece na caixa de nome: <c>B7</c> ou <c>B2:D10</c>.</summary>
     public string SelectionReference => _canvas.Selection.ToReferenceText();
 
+    /// <summary>Retângulo selecionado, já normalizado. É o que a Tabela de Dados lê para achar cabeçalho e área de resultado.</summary>
+    public CellRange SelectionRange => _canvas.Selection.Range;
+
     /// <summary>Conteúdo editável da célula ativa, do jeito que a barra de fórmulas mostra.</summary>
     public string ActiveCellText => CellInput.ToEditText(_canvas.ActiveCell);
 
@@ -481,6 +484,64 @@ public sealed class SpreadsheetView : UserControl
 
         _canvas.Selection.MoveTo(targetAnchor);
         _canvas.Selection.ExtendTo(farCorner);
+    }
+
+    // -------------------------------------------------------- tabela de dados
+
+    /// <summary>
+    /// Grava os resultados calculados por <see cref="DataTableEngine"/> na aba
+    /// atual, como um único passo de desfazer.
+    /// <para>
+    /// A célula recebe um valor literal, não uma fórmula viva — é a mesma opção
+    /// que a maioria dos modelistas de IB/PE já usa na prática no Excel real
+    /// ("Automático exceto tabelas de dados"), porque uma tabela de sensibilidade
+    /// recalculando a cada tecla junto com o modelo inteiro fica lenta demais em
+    /// planilhas grandes. A cor da fonte é travada em preto — convenção de
+    /// "calculado" — só quando a célula ainda não tem cor manual, para não
+    /// herdar o azul automático de entrada manual.
+    /// </para>
+    /// </summary>
+    public void ApplyDataTableResults(string description, IReadOnlyDictionary<CellAddress, CellValue> results)
+    {
+        CalculationEngine? engine = _canvas.Engine;
+
+        if (engine is null || string.IsNullOrEmpty(_canvas.SheetName) || results.Count == 0)
+        {
+            return;
+        }
+
+        Worksheet sheet = engine.Workbook[_canvas.SheetName];
+        var edits = new List<CellEdit>();
+
+        engine.AutoRecalculate = false;
+
+        foreach ((CellAddress address, CellValue value) in results)
+        {
+            Cell before = sheet.GetCell(address);
+            Cell after = before with
+            {
+                Formula = null,
+                Value = value,
+                Style = before.Style.FontColor is null
+                    ? before.Style with { FontColor = CellColorClassifier.FormulaColor }
+                    : before.Style,
+            };
+
+            if (after == before)
+            {
+                continue;
+            }
+
+            var location = new CellLocation(_canvas.SheetName, address);
+            engine.SetCell(location, after);
+            edits.Add(new CellEdit(location, before, after));
+        }
+
+        engine.AutoRecalculate = true;
+        engine.Recalculate();
+
+        PushUndo(description, edits);
+        AfterFormatChange();
     }
 
     // ------------------------------------------------------------ desfazer/refazer
