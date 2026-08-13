@@ -29,6 +29,9 @@ public sealed class FunctionRegistry : IFunctionRegistry
         registry.Register(new MinFunction());
         registry.Register(new MaxFunction());
         registry.Register(new CountAFunction());
+        registry.Register(new ProductFunction());
+        registry.Register(new MedianFunction());
+        registry.Register(new PercentileFunction());
 
         // Lógicas
         registry.Register(new IfFunction());
@@ -47,6 +50,13 @@ public sealed class FunctionRegistry : IFunctionRegistry
         registry.Register(new IrrFunction());
         registry.Register(new FvFunction());
         registry.Register(new RateFunction());
+
+        // Referência
+        registry.Register(new ChooseFunction());
+
+        // Data
+        registry.Register(new TodayFunction());
+        registry.Register(new YearFracFunction());
 
         return registry;
     }

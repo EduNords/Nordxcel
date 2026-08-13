@@ -149,6 +149,7 @@ public sealed partial class RibbonBar : UserControl
     public event EventHandler? NewRequested;
     public event EventHandler? OpenRequested;
     public event EventHandler? SaveAsRequested;
+    public event EventHandler? ImportXlsxRequested;
     public event EventHandler? ExportXlsxRequested;
 
     // Aba Exibir
@@ -429,6 +430,10 @@ public sealed partial class RibbonBar : UserControl
         }
 
         panel.Children.Add(new Border { Height = 1, Background = DividerBrush, Margin = new Thickness(4, 4, 4, 4) });
+
+        Button import = ToolbarMenuRow("Importar de .xlsx...");
+        import.Click += (_, _) => { ImportXlsxRequested?.Invoke(this, EventArgs.Empty); flyout.Hide(); };
+        panel.Children.Add(import);
 
         Button export = ToolbarMenuRow("Exportar para .xlsx...");
         export.Click += (_, _) => { ExportXlsxRequested?.Invoke(this, EventArgs.Empty); flyout.Hide(); };

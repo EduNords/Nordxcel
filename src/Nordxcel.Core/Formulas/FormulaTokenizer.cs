@@ -176,11 +176,11 @@ public sealed class FormulaTokenizer(FormulaSyntax? syntax = null)
         return new FormulaToken(TokenKind.Text, builder.ToString(), start);
     }
 
-    private static FormulaToken ReadError(string formula, ref int position)
+    private FormulaToken ReadError(string formula, ref int position)
     {
         int start = position;
 
-        if (!CellErrors.TryMatchPrefix(formula.AsSpan(position), out CellErrorType error, out int length))
+        if (!_syntax.TryMatchErrorPrefix(formula.AsSpan(position), out CellErrorType error, out int length))
         {
             throw new FormulaSyntaxException("Literal de erro desconhecido.", start);
         }

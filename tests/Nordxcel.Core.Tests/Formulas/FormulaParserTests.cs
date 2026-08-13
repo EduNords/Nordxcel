@@ -30,6 +30,39 @@ public class FormulaParserTests
     public void Parse_NomeDesconhecidoViraNameNode() =>
         Assert.Equal(new NameNode("Taxa_Imposto"), Parse("Taxa_Imposto"));
 
+    // -------------------------------------------------- sintaxe EnUs (importação)
+
+    [Fact]
+    public void EnUs_ReconheceLiteraisLogicosEmIngles()
+    {
+        var parser = new FormulaParser(FormulaSyntax.EnUs);
+
+        Assert.Equal(new LogicalNode(true), parser.Parse("TRUE"));
+        Assert.Equal(new LogicalNode(false), parser.Parse("false"));
+    }
+
+    [Fact]
+    public void EnUs_ReconheceTokenDeErroEmIngles()
+    {
+        var parser = new FormulaParser(FormulaSyntax.EnUs);
+
+        Assert.Equal(new ErrorNode(CellErrorType.NotAvailable), parser.Parse("#N/A"));
+        Assert.Equal(new ErrorNode(CellErrorType.Value), parser.Parse("#VALUE!"));
+    }
+
+    [Fact]
+    public void EnUs_TambemAceitaTokenDeErroEmPortugues() =>
+        // Uma fórmula importada pode ter sido originalmente redigitada por alguém
+        // usando o Excel em português — os dois vocabulários precisam funcionar.
+        Assert.Equal(
+            new ErrorNode(CellErrorType.NotAvailable),
+            new FormulaParser(FormulaSyntax.EnUs).Parse("#N/D"));
+
+    [Fact]
+    public void PtBr_NaoReconheceLiteralLogicoEmIngles() =>
+        // Sintaxe padrão continua só em português — "TRUE" vira nome desconhecido.
+        Assert.Equal(new NameNode("TRUE"), Parse("TRUE"));
+
     // ------------------------------------------------- referências e intervalos
 
     [Fact]

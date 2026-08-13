@@ -35,6 +35,10 @@ public sealed class FormulaSyntax
         FalseLiteral = falseLiteral;
         FunctionNames = functionNames;
         ErrorTokens = errorTokens;
+        FunctionNamesReverse = functionNames?.ToDictionary(
+            static kv => kv.Value,
+            static kv => kv.Key,
+            StringComparer.OrdinalIgnoreCase);
 
         NumberFormat = new NumberFormatInfo
         {
@@ -73,6 +77,12 @@ public sealed class FormulaSyntax
         ["TIR"] = "IRR",
         ["VF"] = "FV",
         ["TAXA"] = "RATE",
+        ["MULT"] = "PRODUCT",
+        ["MED"] = "MEDIAN",
+        ["PERCENTIL"] = "PERCENTILE",
+        ["ESCOLHER"] = "CHOOSE",
+        ["HOJE"] = "TODAY",
+        ["FRAÇÃOANO"] = "YEARFRAC",
     };
 
     /// <summary>
@@ -127,5 +137,47 @@ public sealed class FormulaSyntax
     /// <summary>Token de cada erro nesta sintaxe, ou <c>null</c> quando <see cref="CellErrors.ToDisplayText"/> já basta.</summary>
     public IReadOnlyDictionary<CellErrorType, string>? ErrorTokens { get; }
 
+    /// <summary>
+    /// <see cref="FunctionNames"/> de trás para frente (nome nesta sintaxe → nome
+    /// em português), usada na importação para reconhecer <c>SUM</c> como
+    /// <c>SOMA</c>. <c>null</c> pelo mesmo motivo que <see cref="FunctionNames"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? FunctionNamesReverse { get; }
+
     internal NumberFormatInfo NumberFormat { get; }
+
+    /// <summary>
+    /// Reconhece um literal de erro no início do texto, na convenção desta
+    /// sintaxe. Tenta primeiro os tokens desta língua (para <see cref="EnUs"/>,
+    /// <c>#VALUE!</c> etc.) e cai para os tokens em português — um arquivo
+    /// importado de verdade pode ter fórmula com <c>#N/A</c> digitado por quem
+    /// fez a planilha em inglês, mas <c>#N/D</c> nunca aparece lá, então não
+    /// custa aceitar os dois.
+    /// </summary>
+    internal bool TryMatchErrorPrefix(ReadOnlySpan<char> text, out CellErrorType error, out int length)
+    {
+        if (ErrorTokens is not null && TryMatchReverseErrorPrefix(text, out error, out length))
+        {
+            return true;
+        }
+
+        return CellErrors.TryMatchPrefix(text, out error, out length);
+    }
+
+    private bool TryMatchReverseErrorPrefix(ReadOnlySpan<char> text, out CellErrorType error, out int length)
+    {
+        error = CellErrorType.None;
+        length = 0;
+
+        foreach ((CellErrorType candidateType, string candidateText) in ErrorTokens!)
+        {
+            if (candidateText.Length > length && text.StartsWith(candidateText, StringComparison.OrdinalIgnoreCase))
+            {
+                error = candidateType;
+                length = candidateText.Length;
+            }
+        }
+
+        return length > 0;
+    }
 }

@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Nordxcel.Core.Calculation;
 using Nordxcel.Core.Export;
+using Nordxcel.Core.Import;
 using Nordxcel.Core.Model;
 using Nordxcel.Core.Persistence;
 using Nordxcel.Desktop.Controls;
@@ -140,6 +141,7 @@ public partial class MainWindow : Window
         Ribbon.NewRequested += (_, _) => _ = NewAsync();
         Ribbon.OpenRequested += (_, _) => _ = OpenAsync();
         Ribbon.SaveAsRequested += (_, _) => _ = SaveAsAsync();
+        Ribbon.ImportXlsxRequested += (_, _) => _ = ImportXlsxAsync();
         Ribbon.ExportXlsxRequested += (_, _) => _ = ExportXlsxAsync();
 
         Ribbon.FreezePanesRequested += (_, _) => Sheet.FreezeAtSelection();
@@ -511,6 +513,117 @@ public partial class MainWindow : Window
             Title = "Abrir modelo",
             AllowMultiple = false,
             FileTypeFilter = [NordxcelFileType],
+        });
+
+        return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
+    // -------------------------------------------------- importação de .xlsx
+
+    private async Task ImportXlsxAsync()
+    {
+        if (!await ConfirmDiscardChangesAsync())
+        {
+            return;
+        }
+
+        string? path = await PromptImportPathAsync();
+
+        if (path is null)
+        {
+            return;
+        }
+
+        XlsxImportResult result;
+
+        try
+        {
+            result = XlsxImporter.Import(path);
+        }
+        catch (XlsxImportException exception)
+        {
+            await MessageDialog.ShowAsync(this, "Não foi possível importar", exception.Message, "OK");
+            return;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            await MessageDialog.ShowAsync(this, "Não foi possível importar", exception.Message, "OK");
+            return;
+        }
+
+        // O arquivo importado não é um .nxcl — vira um documento sem título,
+        // pra "Salvar" nunca sobrescrever o .xlsx original com o formato nativo.
+        // Fica sujo de propósito: só existe na memória até o usuário salvar.
+        LoadWorkbook(result.Workbook, path: null);
+        _isDirty = true;
+        UpdateTitle();
+
+        await ShowImportSummaryAsync(result);
+    }
+
+    private async Task ShowImportSummaryAsync(XlsxImportResult result)
+    {
+        var lines = new List<string>
+        {
+            $"{result.Workbook.Worksheets.Count} aba(s) importada(s): {string.Join(", ", result.Workbook.Worksheets.Select(w => w.Name))}.",
+        };
+
+        if (result.UnsupportedFunctions.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("Funções que o Nordxcel ainda não tem — a célula mostra #NOME?, revise manualmente:");
+
+            foreach ((string name, int count) in result.UnsupportedFunctions.OrderByDescending(entry => entry.Value))
+            {
+                lines.Add($"• {name}: {count} célula(s)");
+            }
+        }
+
+        if (result.UnrecognizedNames.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("Nomes definidos (intervalo nomeado) que o Nordxcel ainda não tem — também vira #NOME?:");
+
+            foreach ((string name, int count) in result.UnrecognizedNames.OrderByDescending(entry => entry.Value))
+            {
+                lines.Add($"• {name}: {count} célula(s)");
+            }
+        }
+
+        if (result.UnparseableFormulaCount > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(
+                $"{result.UnparseableFormulaCount} célula(s) com fórmula que nem chegou a ser interpretada " +
+                "(fórmula de matriz, tabela do Excel, célula de resultado de função dinâmica...) — também #NOME?.");
+        }
+
+        if (_engine.HasCircularReferences)
+        {
+            lines.Add(string.Empty);
+            lines.Add(
+                $"{_engine.CircularCells.Count} célula(s) em referência circular (#CIRC!) — o Excel não recusa isso, " +
+                "então pode ter vindo de um modelo com cálculo iterativo (ex.: LBO). Revise antes de continuar.");
+        }
+
+        if (result.SkippedFeatureCount > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(
+                $"{result.SkippedFeatureCount} recurso(s) do Excel não importado(s) (célula mesclada, gráfico, " +
+                "tabela...) — fora do escopo atual do Nordxcel.");
+        }
+
+        await MessageDialog.ShowAsync(this, "Importação concluída", string.Join('\n', lines), "OK");
+    }
+
+    private async Task<string?> PromptImportPathAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Importar de .xlsx",
+            AllowMultiple = false,
+            FileTypeFilter = [XlsxFileType],
         });
 
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;

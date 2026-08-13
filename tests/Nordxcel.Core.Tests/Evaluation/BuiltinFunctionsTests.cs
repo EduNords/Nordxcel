@@ -1,5 +1,6 @@
 using Nordxcel.Core.Evaluation;
 using Nordxcel.Core.Evaluation.Functions;
+using Nordxcel.Core.Formatting;
 using Nordxcel.Core.Formulas;
 using Nordxcel.Core.Model;
 
@@ -141,6 +142,59 @@ public class BuiltinFunctionsTests
     public void ContValores_NaoPropagaErro() =>
         Assert.Equal(1d, Number("CONT.VALORES(A1:A3)", ColumnA(CellValue.Error(CellErrorType.DivideByZero))));
 
+    [Fact]
+    public void Mult_MultiplicaOsArgumentos() =>
+        Assert.Equal(24d, Number("MULT(A1:A3)", ColumnA(
+            CellValue.Number(2),
+            CellValue.Number(3),
+            CellValue.Number(4))));
+
+    [Fact]
+    public void Mult_SemNenhumNumero_DaZero() =>
+        Assert.Equal(0d, Number("MULT(A1:A5)"));
+
+    [Fact]
+    public void Med_ComQuantidadeImpar_DevolveOValorDoMeio() =>
+        Assert.Equal(5d, Number("MED(A1:A3)", ColumnA(CellValue.Number(9), CellValue.Number(1), CellValue.Number(5))));
+
+    [Fact]
+    public void Med_ComQuantidadePar_DevolveAMediaDosDoisDoMeio() =>
+        Assert.Equal(7d, Number("MED(A1:A4)", ColumnA(
+            CellValue.Number(9), CellValue.Number(1), CellValue.Number(5), CellValue.Number(20))));
+
+    [Fact]
+    public void Med_SemNenhumNumero_ViraErroDeNumero() =>
+        Assert.Equal(CellErrorType.Number, Error("MED(A1:A5)"));
+
+    [Fact]
+    public void Percentil_MedianaBateComMed() =>
+        Assert.Equal(5d, Number("PERCENTIL(A1:A3;0,5)", ColumnA(CellValue.Number(9), CellValue.Number(1), CellValue.Number(5))));
+
+    [Fact]
+    public void Percentil_NosExtremosDevolveMinimoEMaximo()
+    {
+        var setup = ColumnA(CellValue.Number(10), CellValue.Number(20), CellValue.Number(30));
+
+        Assert.Equal(10d, Number("PERCENTIL(A1:A3;0)", setup));
+        Assert.Equal(30d, Number("PERCENTIL(A1:A3;1)", setup));
+    }
+
+    [Fact]
+    public void Percentil_NaPosicaoExata_NaoInterpola() =>
+        // 5 valores (posições 0 a 4), k=0,25 cai exatamente na posição 1 (valor 10).
+        Assert.Equal(10d, Number("PERCENTIL(A1:A5;0,25)", ColumnA(
+            CellValue.Number(0), CellValue.Number(10), CellValue.Number(20), CellValue.Number(30), CellValue.Number(40))));
+
+    [Fact]
+    public void Percentil_EntreDuasPosicoes_Interpola() =>
+        // 4 valores (0, 10, 20, 30), k=0,25 cai a 3/4 do caminho entre a posição 0 e a 1.
+        Assert.Equal(7.5d, Number("PERCENTIL(A1:A4;0,25)", ColumnA(
+            CellValue.Number(0), CellValue.Number(10), CellValue.Number(20), CellValue.Number(30))));
+
+    [Fact]
+    public void Percentil_ForaDeZeroEUm_ViraErroDeNumero() =>
+        Assert.Equal(CellErrorType.Number, Error("PERCENTIL(A1:A3;1,5)", ColumnA(CellValue.Number(1))));
+
     // --------------------------------------------------------------- lógicas
 
     [Fact]
@@ -228,6 +282,23 @@ public class BuiltinFunctionsTests
         Assert.Equal(CellErrorType.DivideByZero, Error("OU(VERDADEIRO;1/0)"));
     }
 
+    // ------------------------------------------------------------ referência
+
+    [Fact]
+    public void Escolher_DevolveOArgumentoNaPosicaoPedida() =>
+        Assert.Equal(CellValue.Text("B"), Eval("ESCOLHER(2;\"A\";\"B\";\"C\")"));
+
+    [Fact]
+    public void Escolher_TruncaIndiceComCasasDecimais() =>
+        // 2,9 aponta pra segunda opção, não a terceira — igual a ARRED não faria aqui.
+        Assert.Equal(CellValue.Text("B"), Eval("ESCOLHER(2,9;\"A\";\"B\";\"C\")"));
+
+    [Theory]
+    [InlineData("ESCOLHER(0;\"A\";\"B\")")]
+    [InlineData("ESCOLHER(3;\"A\";\"B\")")]
+    public void Escolher_IndiceForaDaFaixa_ViraErroDeValor(string formula) =>
+        Assert.Equal(CellErrorType.Value, Error(formula));
+
     // ----------------------------------------------------------- matemáticas
 
     [Theory]
@@ -292,6 +363,53 @@ public class BuiltinFunctionsTests
         Assert.Equal(expected, result, 9);
     }
 
+    // ------------------------------------------------------------------ data
+
+    [Fact]
+    public void Hoje_DevolveOSerialDoDiaDeHoje() =>
+        Assert.Equal(ExcelDate.ToSerial(DateTime.Today), Number("HOJE()"));
+
+    [Fact]
+    public void FracaoAno_UmAnoCheio_DaUm() =>
+        Assert.Equal(1d, Number("FRAÇÃOANO(A1;A2)", ColumnA(
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 1, 1))),
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2025, 1, 1))))), 6);
+
+    [Fact]
+    public void FracaoAno_MeioAno30_360_DaMeio() =>
+        Assert.Equal(0.5d, Number("FRAÇÃOANO(A1;A2;0)", ColumnA(
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 1, 1))),
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 7, 1))))), 6);
+
+    [Fact]
+    public void FracaoAno_NaoDependeDaOrdemDasDatas() =>
+        Assert.Equal(
+            Number("FRAÇÃOANO(A1;A2)", ColumnA(
+                CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 1, 1))),
+                CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 7, 1))))),
+            Number("FRAÇÃOANO(A1;A2)", ColumnA(
+                CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 7, 1))),
+                CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 1, 1))))));
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void FracaoAno_BasesSuportadas_NaoDaoErro(int basis)
+    {
+        CellValue value = Eval($"FRAÇÃOANO(A1;A2;{basis})", ColumnA(
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 1, 1))),
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 7, 1)))));
+
+        Assert.True(value.IsNumber, $"Base {basis} devia dar número, deu {value}.");
+    }
+
+    [Fact]
+    public void FracaoAno_Base1NaoSuportada_ViraErroDeNumero() =>
+        Assert.Equal(CellErrorType.Number, Error("FRAÇÃOANO(A1;A2;1)", ColumnA(
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 1, 1))),
+            CellValue.Number(ExcelDate.ToSerial(new DateTime(2024, 7, 1))))));
+
     // -------------------------------------------------------------- catálogo
 
     [Fact]
@@ -301,9 +419,10 @@ public class BuiltinFunctionsTests
 
         foreach (string name in new[]
                  {
-                     "SOMA", "MÉDIA", "MÍNIMO", "MÁXIMO", "CONT.VALORES",
+                     "SOMA", "MÉDIA", "MÍNIMO", "MÁXIMO", "CONT.VALORES", "MULT", "MED", "PERCENTIL",
                      "SE", "E", "OU", "SEERRO",
                      "ARRED", "ABS", "POTÊNCIA", "RAIZ",
+                     "ESCOLHER", "HOJE", "FRAÇÃOANO",
                  })
         {
             Assert.True(registry.TryGetFunction(name, out _), $"Faltou registrar {name}.");

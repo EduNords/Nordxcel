@@ -16,6 +16,7 @@ namespace Nordxcel.Core.Formulas;
 public sealed class FormulaParser(FormulaSyntax? syntax = null)
 {
     private readonly FormulaTokenizer _tokenizer = new(syntax);
+    private readonly FormulaSyntax _syntax = syntax ?? FormulaSyntax.Default;
 
     /// <summary>Interpreta uma fórmula com a convenção brasileira.</summary>
     public static FormulaNode ParseDefault(string formula) => new FormulaParser().Parse(formula);
@@ -267,12 +268,12 @@ public sealed class FormulaParser(FormulaSyntax? syntax = null)
             return ParseFunctionCall(cursor, token);
         }
 
-        if (string.Equals(token.Lexeme, "VERDADEIRO", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(token.Lexeme, _syntax.TrueLiteral, StringComparison.OrdinalIgnoreCase))
         {
             return new LogicalNode(true);
         }
 
-        if (string.Equals(token.Lexeme, "FALSO", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(token.Lexeme, _syntax.FalseLiteral, StringComparison.OrdinalIgnoreCase))
         {
             return new LogicalNode(false);
         }
