@@ -10,37 +10,7 @@
         WindowStartupLocation="CenterScreen">
 
     <DockPanel>
-        <Menu DockPanel.Dock="Top">
-            <MenuItem Header="_Arquivo">
-                <MenuItem Header="Novo" InputGesture="Ctrl+N" Click="OnNew" />
-                <MenuItem Header="Abrir..." InputGesture="Ctrl+O" Click="OnOpen" />
-                <Separator />
-                <MenuItem Header="Salvar" InputGesture="Ctrl+S" Click="OnSave" />
-                <MenuItem Header="Salvar Como..." InputGesture="Ctrl+Shift+S" Click="OnSaveAs" />
-                <Separator />
-                <MenuItem Header="Exportar para .xlsx..." Click="OnExportXlsx" />
-            </MenuItem>
-            <MenuItem Header="_Editar">
-                <MenuItem x:Name="UndoMenuItem" Header="Desfazer" InputGesture="Ctrl+Z" Click="OnUndo" />
-                <MenuItem x:Name="RedoMenuItem" Header="Refazer" InputGesture="Ctrl+Y" Click="OnRedo" />
-                <Separator />
-                <MenuItem Header="Recortar" InputGesture="Ctrl+X" Click="OnCut" />
-                <MenuItem Header="Copiar" InputGesture="Ctrl+C" Click="OnCopy" />
-                <MenuItem Header="Colar" InputGesture="Ctrl+V" Click="OnPaste" />
-            </MenuItem>
-            <MenuItem Header="_Exibir">
-                <MenuItem Header="Congelar Painéis" Click="OnFreezePanes" />
-                <MenuItem Header="Congelar Linha Superior" Click="OnFreezeTopRow" />
-                <MenuItem Header="Congelar Primeira Coluna" Click="OnFreezeFirstColumn" />
-                <Separator />
-                <MenuItem Header="Descongelar Painéis" Click="OnUnfreezePanes" />
-            </MenuItem>
-            <MenuItem Header="_Dados">
-                <MenuItem Header="Tabela de Dados (1 Variável)..." Click="OnDataTableOneVariable" />
-                <MenuItem Header="Tabela de Dados (2 Variáveis)..." Click="OnDataTableTwoVariables" />
-            </MenuItem>
-        </Menu>
-        <controls:FormattingToolbar x:Name="Toolbar" DockPanel.Dock="Top" />
+        <controls:RibbonBar x:Name="Ribbon" DockPanel.Dock="Top" />
         <controls:FormulaBar x:Name="Formulas" DockPanel.Dock="Top" />
         <controls:SheetTabStrip x:Name="Tabs" DockPanel.Dock="Bottom" />
         <controls:SpreadsheetView x:Name="Sheet" />

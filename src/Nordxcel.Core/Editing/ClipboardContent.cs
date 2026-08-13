@@ -130,6 +130,85 @@ public sealed class ClipboardContent
     }
 
     /// <summary>
+    /// Igual a <see cref="ComputePaste"/>, mas toda célula colada vira valor
+    /// literal — nunca fórmula, mesmo que a origem tivesse uma. Usa o
+    /// <see cref="Cell.Value"/> já capturado no instante da cópia, o mesmo
+    /// resultado que "Colar Valores" do Excel de verdade produz: não recalcula
+    /// nada, só congela o número que já estava lá.
+    /// </summary>
+    public IReadOnlyList<CellEdit> ComputePasteValues(Workbook workbook, string targetSheetName, CellAddress targetAnchor)
+    {
+        ArgumentNullException.ThrowIfNull(workbook);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetSheetName);
+
+        Worksheet target = workbook[targetSheetName];
+        var edits = new List<CellEdit>();
+
+        for (int r = 0; r < RowCount; r++)
+        {
+            for (int c = 0; c < ColumnCount; c++)
+            {
+                if (!targetAnchor.TryOffset(r, c, out CellAddress destination))
+                {
+                    continue;
+                }
+
+                Cell source = _cells[r, c];
+                Cell before = target.GetCell(destination);
+                Cell pasted = before with { Formula = null, Value = source.Value };
+
+                if (pasted == before)
+                {
+                    continue;
+                }
+
+                edits.Add(new CellEdit(new CellLocation(targetSheetName, destination), before, pasted));
+            }
+        }
+
+        return edits;
+    }
+
+    /// <summary>
+    /// Igual a <see cref="ComputePasteValues"/>, mas ao contrário: só estilo e
+    /// formato de número viajam, fórmula e valor do destino ficam como estavam.
+    /// É o "Colar Formatação" do Excel — útil para replicar uma formatação sem
+    /// mexer no conteúdo já digitado ali.
+    /// </summary>
+    public IReadOnlyList<CellEdit> ComputePasteFormat(Workbook workbook, string targetSheetName, CellAddress targetAnchor)
+    {
+        ArgumentNullException.ThrowIfNull(workbook);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetSheetName);
+
+        Worksheet target = workbook[targetSheetName];
+        var edits = new List<CellEdit>();
+
+        for (int r = 0; r < RowCount; r++)
+        {
+            for (int c = 0; c < ColumnCount; c++)
+            {
+                if (!targetAnchor.TryOffset(r, c, out CellAddress destination))
+                {
+                    continue;
+                }
+
+                Cell source = _cells[r, c];
+                Cell before = target.GetCell(destination);
+                Cell pasted = before with { Style = source.Style, NumberFormat = source.NumberFormat };
+
+                if (pasted == before)
+                {
+                    continue;
+                }
+
+                edits.Add(new CellEdit(new CellLocation(targetSheetName, destination), before, pasted));
+            }
+        }
+
+        return edits;
+    }
+
+    /// <summary>
     /// Endereços de destino que colar a partir da âncora ocuparia — inclusive os
     /// que não mudariam de conteúdo. Quem termina um recorte usa isso para saber
     /// quais células da origem <b>não</b> devem ser apagadas por coincidirem com

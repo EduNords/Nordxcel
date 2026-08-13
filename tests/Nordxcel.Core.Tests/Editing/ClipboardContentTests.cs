@@ -283,6 +283,126 @@ public class ClipboardContentTests
         Assert.Empty(edits);
     }
 
+    // -------------------------------------------------------- colar valores
+
+    [Fact]
+    public void ComputePasteValues_CelulaDeFormulaColaComoValorLiteral()
+    {
+        var workbook = CreateWorkbook();
+        Worksheet sheet = workbook[Sheet];
+
+        // Cell.Value é o valor já calculado da fórmula, exatamente como o
+        // CalculationEngine deixaria depois de recalcular.
+        sheet.SetCell(At("A1"), new Cell { Formula = "1+1", Value = CellValue.Number(2) });
+
+        ClipboardContent clip = ClipboardContent.Capture(sheet, CellRange.Parse("A1"), isCut: false);
+        IReadOnlyList<CellEdit> edits = clip.ComputePasteValues(workbook, Sheet, At("C3"));
+
+        foreach (CellEdit edit in edits)
+        {
+            workbook[edit.Location.SheetName].SetCell(edit.Location.Address, edit.After);
+        }
+
+        Cell pasted = sheet.GetCell(At("C3"));
+        Assert.Null(pasted.Formula);
+        Assert.Equal(2d, pasted.Value.AsNumber());
+    }
+
+    [Fact]
+    public void ComputePasteValues_PreservaEstiloEFormatoDoDestino()
+    {
+        var workbook = CreateWorkbook();
+        Worksheet sheet = workbook[Sheet];
+        sheet.SetValue(At("A1"), CellValue.Number(10));
+        sheet.SetCell(At("C3"), new Cell
+        {
+            NumberFormat = StandardNumberFormats.Percent,
+            Style = CellStyle.Default with { Bold = true },
+        });
+
+        ClipboardContent clip = ClipboardContent.Capture(sheet, CellRange.Parse("A1"), isCut: false);
+
+        foreach (CellEdit edit in clip.ComputePasteValues(workbook, Sheet, At("C3")))
+        {
+            sheet.SetCell(edit.Location.Address, edit.After);
+        }
+
+        Cell pasted = sheet.GetCell(At("C3"));
+        Assert.Equal(10d, pasted.Value.AsNumber());
+        Assert.Equal(StandardNumberFormats.Percent, pasted.NumberFormat);
+        Assert.True(pasted.Style.Bold);
+    }
+
+    [Fact]
+    public void ComputePasteValues_NaoEscreveNada()
+    {
+        var workbook = CreateWorkbook();
+        Worksheet sheet = workbook[Sheet];
+        sheet.SetValue(At("A1"), CellValue.Number(1));
+
+        ClipboardContent clip = ClipboardContent.Capture(sheet, CellRange.Parse("A1"), isCut: false);
+        clip.ComputePasteValues(workbook, Sheet, At("C3"));
+
+        Assert.True(sheet.GetValue(At("C3")).IsBlank);
+    }
+
+    [Fact]
+    public void ComputePasteValues_SemMudarNada_NaoDevolveEdicoes()
+    {
+        var workbook = CreateWorkbook();
+        Worksheet sheet = workbook[Sheet];
+        sheet.SetValue(At("A1"), CellValue.Number(5));
+        sheet.SetValue(At("B1"), CellValue.Number(5));
+
+        ClipboardContent clip = ClipboardContent.Capture(sheet, CellRange.Parse("A1"), isCut: false);
+        IReadOnlyList<CellEdit> edits = clip.ComputePasteValues(workbook, Sheet, At("B1"));
+
+        Assert.Empty(edits);
+    }
+
+    // ------------------------------------------------------ colar formatação
+
+    [Fact]
+    public void ComputePasteFormat_LevaEstiloENumberFormatSemMexerNoConteudoDoDestino()
+    {
+        var workbook = CreateWorkbook();
+        Worksheet sheet = workbook[Sheet];
+        sheet.SetCell(At("A1"), new Cell
+        {
+            Value = CellValue.Number(1),
+            NumberFormat = StandardNumberFormats.Percent,
+            Style = CellStyle.Default with { Bold = true },
+        });
+        sheet.SetValue(At("C3"), CellValue.Number(999));
+
+        ClipboardContent clip = ClipboardContent.Capture(sheet, CellRange.Parse("A1"), isCut: false);
+
+        foreach (CellEdit edit in clip.ComputePasteFormat(workbook, Sheet, At("C3")))
+        {
+            sheet.SetCell(edit.Location.Address, edit.After);
+        }
+
+        Cell pasted = sheet.GetCell(At("C3"));
+        Assert.Equal(999d, pasted.Value.AsNumber());
+        Assert.Equal(StandardNumberFormats.Percent, pasted.NumberFormat);
+        Assert.True(pasted.Style.Bold);
+    }
+
+    [Fact]
+    public void ComputePasteFormat_SemMudarNada_NaoDevolveEdicoes()
+    {
+        var workbook = CreateWorkbook();
+        Worksheet sheet = workbook[Sheet];
+        var estilo = CellStyle.Default with { Bold = true };
+        sheet.SetCell(At("A1"), new Cell { Style = estilo });
+        sheet.SetCell(At("B1"), new Cell { Value = CellValue.Number(7), Style = estilo });
+
+        ClipboardContent clip = ClipboardContent.Capture(sheet, CellRange.Parse("A1"), isCut: false);
+        IReadOnlyList<CellEdit> edits = clip.ComputePasteFormat(workbook, Sheet, At("B1"));
+
+        Assert.Empty(edits);
+    }
+
     // ---------------------------------------------------------- recortar (cut)
 
     [Fact]

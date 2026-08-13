@@ -75,7 +75,7 @@ public partial class MainWindow : Window
             Sheet.FocusGrid();
         };
 
-        WireToolbar();
+        WireRibbon();
 
         Closing += OnWindowClosing;
 
@@ -87,57 +87,73 @@ public partial class MainWindow : Window
     private void UpdateFormulaBar()
     {
         Formulas.Update(Sheet.SelectionReference, Sheet.ActiveCellText);
-        Toolbar.UpdateFromStyle(Sheet.ActiveStyle, Sheet.ActiveNumberFormat);
-
-        UndoMenuItem.Header = Sheet.NextUndoDescription is { } undo ? $"Desfazer {undo}" : "Desfazer";
-        UndoMenuItem.IsEnabled = Sheet.CanUndo;
-
-        RedoMenuItem.Header = Sheet.NextRedoDescription is { } redo ? $"Refazer {redo}" : "Refazer";
-        RedoMenuItem.IsEnabled = Sheet.CanRedo;
+        Ribbon.UpdateFromStyle(Sheet.ActiveStyle, Sheet.ActiveNumberFormat);
+        Ribbon.UpdateUndoRedo(Sheet.CanUndo, Sheet.NextUndoDescription, Sheet.CanRedo, Sheet.NextRedoDescription);
+        Ribbon.UpdateFormatPainterState(Sheet.HasPendingFormatPaint);
     }
 
     /// <summary>
-    /// Liga cada botão da barra de formatação à seleção atual. A barra em si não
-    /// conhece <c>Worksheet</c> nem <c>CalculationEngine</c> — só levanta eventos —
-    /// e é o <see cref="SpreadsheetView"/> que sabe aplicar sobre a seleção.
+    /// Liga cada botão do ribbon à seleção atual. O ribbon em si não conhece
+    /// <c>Worksheet</c> nem <c>CalculationEngine</c> — só levanta eventos — e é o
+    /// <see cref="SpreadsheetView"/> que sabe aplicar sobre a seleção.
     /// </summary>
-    private void WireToolbar()
+    private void WireRibbon()
     {
-        Toolbar.BoldToggleRequested += (_, _) => { Sheet.ToggleBold(); Sheet.FocusGrid(); };
-        Toolbar.ItalicToggleRequested += (_, _) => { Sheet.ToggleItalic(); Sheet.FocusGrid(); };
-        Toolbar.UnderlineToggleRequested += (_, _) => { Sheet.ToggleUnderline(); Sheet.FocusGrid(); };
+        Ribbon.BoldToggleRequested += (_, _) => { Sheet.ToggleBold(); Sheet.FocusGrid(); };
+        Ribbon.ItalicToggleRequested += (_, _) => { Sheet.ToggleItalic(); Sheet.FocusGrid(); };
+        Ribbon.UnderlineToggleRequested += (_, _) => { Sheet.ToggleUnderline(); Sheet.FocusGrid(); };
 
-        Toolbar.FontColorSelected += (_, color) => { Sheet.SetFontColor(color); Sheet.FocusGrid(); };
-        Toolbar.FillColorSelected += (_, color) => { Sheet.SetFillColor(color); Sheet.FocusGrid(); };
-        Toolbar.FontFamilySelected += (_, family) => { Sheet.SetFontFamily(family); Sheet.FocusGrid(); };
-        Toolbar.FontSizeSelected += (_, size) => { Sheet.SetFontSize(size); Sheet.FocusGrid(); };
+        Ribbon.FontColorSelected += (_, color) => { Sheet.SetFontColor(color); Sheet.FocusGrid(); };
+        Ribbon.FillColorSelected += (_, color) => { Sheet.SetFillColor(color); Sheet.FocusGrid(); };
+        Ribbon.FontFamilySelected += (_, family) => { Sheet.SetFontFamily(family); Sheet.FocusGrid(); };
+        Ribbon.FontSizeSelected += (_, size) => { Sheet.SetFontSize(size); Sheet.FocusGrid(); };
 
-        Toolbar.HorizontalAlignmentSelected += (_, alignment) => { Sheet.SetHorizontalAlignment(alignment); Sheet.FocusGrid(); };
-        Toolbar.VerticalAlignmentSelected += (_, alignment) => { Sheet.SetVerticalAlignment(alignment); Sheet.FocusGrid(); };
+        Ribbon.HorizontalAlignmentSelected += (_, alignment) => { Sheet.SetHorizontalAlignment(alignment); Sheet.FocusGrid(); };
+        Ribbon.VerticalAlignmentSelected += (_, alignment) => { Sheet.SetVerticalAlignment(alignment); Sheet.FocusGrid(); };
 
-        Toolbar.BorderPresetSelected += (_, request) =>
+        Ribbon.BorderPresetSelected += (_, request) =>
         {
             Sheet.ApplyBorderPreset(request.Preset, request.Style, request.Color);
             Sheet.FocusGrid();
         };
 
-        Toolbar.NumberFormatSelected += (_, mask) => { Sheet.SetNumberFormat(mask); Sheet.FocusGrid(); };
-        Toolbar.DecimalStepRequested += (_, increase) => { Sheet.StepDecimals(increase); Sheet.FocusGrid(); };
+        Ribbon.NumberFormatSelected += (_, mask) => { Sheet.SetNumberFormat(mask); Sheet.FocusGrid(); };
+        Ribbon.DecimalStepRequested += (_, increase) => { Sheet.StepDecimals(increase); Sheet.FocusGrid(); };
+
+        Ribbon.CutRequested += (_, _) => { Sheet.Cut(); Sheet.FocusGrid(); };
+        Ribbon.CopyRequested += (_, _) => { Sheet.Copy(); Sheet.FocusGrid(); };
+        Ribbon.PasteRequested += (_, _) => { Sheet.Paste(); Sheet.FocusGrid(); };
+        Ribbon.PasteValuesRequested += (_, _) => { Sheet.PasteValues(); Sheet.FocusGrid(); };
+        Ribbon.PasteFormatRequested += (_, _) => { Sheet.PasteFormat(); Sheet.FocusGrid(); };
+
+        Ribbon.FormatPainterRequested += (_, _) =>
+        {
+            Sheet.CopyFormat();
+            Ribbon.UpdateFormatPainterState(true);
+            Sheet.FocusGrid();
+        };
+
+        Ribbon.SaveRequested += (_, _) => _ = SaveAsync();
+        Ribbon.UndoRequested += (_, _) => { Sheet.Undo(); Sheet.FocusGrid(); };
+        Ribbon.RedoRequested += (_, _) => { Sheet.Redo(); Sheet.FocusGrid(); };
+
+        Ribbon.NewRequested += (_, _) => _ = NewAsync();
+        Ribbon.OpenRequested += (_, _) => _ = OpenAsync();
+        Ribbon.SaveAsRequested += (_, _) => _ = SaveAsAsync();
+        Ribbon.ExportXlsxRequested += (_, _) => _ = ExportXlsxAsync();
+
+        Ribbon.FreezePanesRequested += (_, _) => Sheet.FreezeAtSelection();
+        Ribbon.FreezeTopRowRequested += (_, _) => Sheet.FreezeTopRow();
+        Ribbon.FreezeFirstColumnRequested += (_, _) => Sheet.FreezeFirstColumn();
+        Ribbon.UnfreezePanesRequested += (_, _) => Sheet.UnfreezePanes();
+
+        Ribbon.DataTableOneVariableRequested += (_, _) => _ = RunDataTableOneVariableAsync();
+        Ribbon.DataTableTwoVariableRequested += (_, _) => _ = RunDataTableTwoVariablesAsync();
+
+        Ribbon.FunctionInsertRequested += (_, name) => Sheet.StartFunctionEntry(name);
     }
 
-    private void OnFreezePanes(object? sender, RoutedEventArgs e) => Sheet.FreezeAtSelection();
-
-    private void OnFreezeTopRow(object? sender, RoutedEventArgs e) => Sheet.FreezeTopRow();
-
-    private void OnFreezeFirstColumn(object? sender, RoutedEventArgs e) => Sheet.FreezeFirstColumn();
-
-    private void OnUnfreezePanes(object? sender, RoutedEventArgs e) => Sheet.UnfreezePanes();
-
     // ------------------------------------------------------- tabela de dados
-
-    private async void OnDataTableOneVariable(object? sender, RoutedEventArgs e) => await RunDataTableOneVariableAsync();
-
-    private async void OnDataTableTwoVariables(object? sender, RoutedEventArgs e) => await RunDataTableTwoVariablesAsync();
 
     private async Task RunDataTableOneVariableAsync()
     {
@@ -403,45 +419,7 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private void OnUndo(object? sender, RoutedEventArgs e)
-    {
-        Sheet.Undo();
-        Sheet.FocusGrid();
-    }
-
-    private void OnRedo(object? sender, RoutedEventArgs e)
-    {
-        Sheet.Redo();
-        Sheet.FocusGrid();
-    }
-
-    private void OnCut(object? sender, RoutedEventArgs e)
-    {
-        Sheet.Cut();
-        Sheet.FocusGrid();
-    }
-
-    private void OnCopy(object? sender, RoutedEventArgs e)
-    {
-        Sheet.Copy();
-        Sheet.FocusGrid();
-    }
-
-    private void OnPaste(object? sender, RoutedEventArgs e)
-    {
-        Sheet.Paste();
-        Sheet.FocusGrid();
-    }
-
     // ------------------------------------------------------------- arquivo
-
-    private async void OnNew(object? sender, RoutedEventArgs e) => await NewAsync();
-
-    private async void OnOpen(object? sender, RoutedEventArgs e) => await OpenAsync();
-
-    private async void OnSave(object? sender, RoutedEventArgs e) => await SaveAsync();
-
-    private async void OnSaveAs(object? sender, RoutedEventArgs e) => await SaveAsAsync();
 
     private async Task NewAsync()
     {
@@ -539,8 +517,6 @@ public partial class MainWindow : Window
     }
 
     // -------------------------------------------------- exportação para .xlsx
-
-    private async void OnExportXlsx(object? sender, RoutedEventArgs e) => await ExportXlsxAsync();
 
     private async Task ExportXlsxAsync()
     {

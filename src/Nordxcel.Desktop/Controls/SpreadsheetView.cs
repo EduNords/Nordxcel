@@ -486,6 +486,119 @@ public sealed class SpreadsheetView : UserControl
         _canvas.Selection.ExtendTo(farCorner);
     }
 
+    /// <summary>
+    /// "Colar Valores": mesmo clipboard interno do Ctrl+V, mas cada célula colada
+    /// vira valor literal — nunca fórmula. Ainda passa pelo motor (não pelo
+    /// <see cref="RangeEditing"/> direto): uma célula colada pode estar
+    /// substituindo uma fórmula antiga, que precisa sair do grafo de
+    /// dependências, e só <c>CalculationEngine.SetCell</c> faz esse desligamento.
+    /// <para>
+    /// Ao contrário de <see cref="Paste"/>, não termina um recorte pendente — colar
+    /// só o valor de uma célula recortada não "move" nada, então a origem fica
+    /// intacta de propósito, o lado mais seguro de errar.
+    /// </para>
+    /// </summary>
+    public void PasteValues()
+    {
+        CalculationEngine? engine = _canvas.Engine;
+
+        if (_clipboard is null || engine is null || string.IsNullOrEmpty(_canvas.SheetName))
+        {
+            return;
+        }
+
+        CellAddress targetAnchor = _canvas.Selection.Active;
+        IReadOnlyList<CellEdit> pasted = _clipboard.ComputePasteValues(engine.Workbook, _canvas.SheetName, targetAnchor);
+
+        engine.AutoRecalculate = false;
+
+        foreach (CellEdit edit in pasted)
+        {
+            engine.SetCell(edit.Location, edit.After);
+        }
+
+        engine.AutoRecalculate = true;
+        engine.Recalculate();
+
+        PushUndo("Colar Valores", pasted);
+        AfterFormatChange();
+    }
+
+    /// <summary>
+    /// "Colar Formatação": só estilo e formato de número viajam do clipboard, o
+    /// conteúdo do destino não muda — não muda valor calculado nenhum, então
+    /// (como <see cref="ApplyStyle(string,System.Func{CellStyle,CellStyle})"/>)
+    /// não precisa passar pelo motor de cálculo.
+    /// </summary>
+    public void PasteFormat()
+    {
+        CalculationEngine? engine = _canvas.Engine;
+        Worksheet? sheet = CurrentSheet();
+
+        if (_clipboard is null || engine is null || sheet is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<CellEdit> edits = _clipboard.ComputePasteFormat(engine.Workbook, _canvas.SheetName, _canvas.Selection.Active);
+
+        foreach (CellEdit edit in edits)
+        {
+            sheet.SetCell(edit.Location.Address, edit.After);
+        }
+
+        PushUndo("Colar Formatação", edits);
+        AfterFormatChange();
+    }
+
+    // -------------------------------------------------- pincel de formatação
+
+    private CellStyle? _copiedFormatStyle;
+    private string? _copiedFormatNumberFormat;
+    private bool _pendingFormatPaint;
+
+    /// <summary>Verdadeiro enquanto o pincel está armado, esperando o próximo clique na grade.</summary>
+    public bool HasPendingFormatPaint => _pendingFormatPaint;
+
+    /// <summary>
+    /// Arma o pincel de formatação com o estilo da célula ativa. A aplicação em
+    /// si acontece na próxima mudança de seleção — ver <see cref="OnCanvasSelectionChanged"/>
+    /// — não precisa de nenhuma captura de mouse nova, só reage ao evento que a
+    /// grade já dispara sozinha a cada clique.
+    /// </summary>
+    public void CopyFormat()
+    {
+        _copiedFormatStyle = ActiveStyle;
+        _copiedFormatNumberFormat = ActiveNumberFormat;
+        _pendingFormatPaint = true;
+    }
+
+    private void ApplyPendingFormatPaint()
+    {
+        _pendingFormatPaint = false;
+
+        if (_copiedFormatStyle is not { } style)
+        {
+            return;
+        }
+
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        string? numberFormat = _copiedFormatNumberFormat;
+        IReadOnlyList<CellEdit> edits = RangeEditing.Apply(
+            sheet,
+            _canvas.Selection.Range,
+            cell => cell with { Style = style, NumberFormat = numberFormat });
+
+        PushUndo("Pincel de Formatação", edits);
+        AfterFormatChange();
+    }
+
     // -------------------------------------------------------- tabela de dados
 
     /// <summary>
@@ -603,6 +716,16 @@ public sealed class SpreadsheetView : UserControl
     }
 
     // -------------------------------------------------------------- edição
+
+    /// <summary>
+    /// Começa a editar a célula ativa já com <c>=NOMEFUNÇÃO(</c> digitado, cursor
+    /// pronto pra continuar — o que a aba Fórmulas do ribbon usa em cada botão de
+    /// função, igual ao Excel abrir o assistente de função. Reaproveita
+    /// <see cref="OnEditRequested"/> por inteiro; só monta o evento sintético que
+    /// a digitação normal dispararia sozinha.
+    /// </summary>
+    public void StartFunctionEntry(string functionName) =>
+        OnEditRequested(this, new CellEditRequestedEventArgs(_canvas.Selection.Active, $"={functionName}("));
 
     private void OnEditRequested(object? sender, CellEditRequestedEventArgs e)
     {
@@ -803,6 +926,11 @@ public sealed class SpreadsheetView : UserControl
         if (_editing)
         {
             CancelEdit();
+        }
+
+        if (_pendingFormatPaint)
+        {
+            ApplyPendingFormatPaint();
         }
 
         SelectionChanged?.Invoke(this, EventArgs.Empty);
