@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -81,6 +82,13 @@ public sealed class SpreadsheetView : UserControl
         _canvas.CommitRequested += (_, direction) => Commit(direction);
         _canvas.CancelRequested += (_, _) => CancelEdit();
         _canvas.LayoutChanged += (_, _) => SyncScrollBars();
+
+        _canvas.CopyRequested += (_, _) => Copy();
+        _canvas.CutRequested += (_, _) => Cut();
+        _canvas.PasteRequested += (_, _) => Paste();
+        _canvas.UndoRequested += (_, _) => Undo();
+        _canvas.RedoRequested += (_, _) => Redo();
+        _canvas.CellsCleared += (_, edits) => PushUndo("Excluir", edits);
 
         _vertical.Scroll += OnVerticalScroll;
         _horizontal.Scroll += OnHorizontalScroll;
@@ -207,7 +215,9 @@ public sealed class SpreadsheetView : UserControl
     public string? ActiveNumberFormat => _canvas.ActiveCell.NumberFormat;
 
     /// <summary>Aplica uma mudança de estilo a toda a seleção.</summary>
-    public void ApplyStyle(Func<CellStyle, CellStyle> transform)
+    public void ApplyStyle(Func<CellStyle, CellStyle> transform) => ApplyStyle("Formatar", transform);
+
+    private void ApplyStyle(string description, Func<CellStyle, CellStyle> transform)
     {
         Worksheet? sheet = CurrentSheet();
 
@@ -216,7 +226,8 @@ public sealed class SpreadsheetView : UserControl
             return;
         }
 
-        RangeEditing.ApplyStyle(sheet, _canvas.Selection.Range, transform);
+        IReadOnlyList<CellEdit> edits = RangeEditing.ApplyStyle(sheet, _canvas.Selection.Range, transform);
+        PushUndo(description, edits);
         AfterFormatChange();
     }
 
@@ -235,36 +246,36 @@ public sealed class SpreadsheetView : UserControl
     public void ToggleBold()
     {
         bool target = !ActiveStyle.Bold;
-        ApplyStyle(s => s with { Bold = target });
+        ApplyStyle("Negrito", s => s with { Bold = target });
     }
 
     public void ToggleItalic()
     {
         bool target = !ActiveStyle.Italic;
-        ApplyStyle(s => s with { Italic = target });
+        ApplyStyle("Itálico", s => s with { Italic = target });
     }
 
     public void ToggleUnderline()
     {
         bool target = !ActiveStyle.Underline;
-        ApplyStyle(s => s with { Underline = target });
+        ApplyStyle("Sublinhado", s => s with { Underline = target });
     }
 
     /// <summary><c>null</c> volta para a cor automática do sistema azul/preto/verde.</summary>
-    public void SetFontColor(RgbColor? color) => ApplyStyle(s => s with { FontColor = color });
+    public void SetFontColor(RgbColor? color) => ApplyStyle("Cor da fonte", s => s with { FontColor = color });
 
     /// <summary><c>null</c> remove o preenchimento.</summary>
-    public void SetFillColor(RgbColor? color) => ApplyStyle(s => s with { BackgroundColor = color });
+    public void SetFillColor(RgbColor? color) => ApplyStyle("Cor de preenchimento", s => s with { BackgroundColor = color });
 
-    public void SetFontFamily(string family) => ApplyStyle(s => s with { FontFamily = family });
+    public void SetFontFamily(string family) => ApplyStyle("Fonte", s => s with { FontFamily = family });
 
-    public void SetFontSize(double size) => ApplyStyle(s => s with { FontSize = size });
+    public void SetFontSize(double size) => ApplyStyle("Tamanho da fonte", s => s with { FontSize = size });
 
     public void SetHorizontalAlignment(CoreHorizontalAlignment alignment) =>
-        ApplyStyle(s => s with { HorizontalAlignment = alignment });
+        ApplyStyle("Alinhamento", s => s with { HorizontalAlignment = alignment });
 
     public void SetVerticalAlignment(CoreVerticalAlignment alignment) =>
-        ApplyStyle(s => s with { VerticalAlignment = alignment });
+        ApplyStyle("Alinhamento", s => s with { VerticalAlignment = alignment });
 
     public void ApplyBorderPreset(BorderPreset preset, BorderLineStyle style, RgbColor color)
     {
@@ -275,7 +286,8 @@ public sealed class SpreadsheetView : UserControl
             return;
         }
 
-        BorderEditing.Apply(sheet, _canvas.Selection.Range, preset, style, color);
+        IReadOnlyList<CellEdit> edits = BorderEditing.Apply(sheet, _canvas.Selection.Range, preset, style, color);
+        PushUndo("Bordas", edits);
         AfterFormatChange();
     }
 
@@ -289,7 +301,8 @@ public sealed class SpreadsheetView : UserControl
             return;
         }
 
-        RangeEditing.ApplyNumberFormat(sheet, _canvas.Selection.Range, mask);
+        IReadOnlyList<CellEdit> edits = RangeEditing.ApplyNumberFormat(sheet, _canvas.Selection.Range, mask);
+        PushUndo("Formato de número", edits);
         AfterFormatChange();
     }
 
@@ -303,13 +316,14 @@ public sealed class SpreadsheetView : UserControl
             return;
         }
 
-        RangeEditing.Apply(sheet, _canvas.Selection.Range, cell => cell with
+        IReadOnlyList<CellEdit> edits = RangeEditing.Apply(sheet, _canvas.Selection.Range, cell => cell with
         {
             NumberFormat = increase
                 ? StandardNumberFormats.IncreaseDecimals(cell.NumberFormat)
                 : StandardNumberFormats.DecreaseDecimals(cell.NumberFormat),
         });
 
+        PushUndo("Casas decimais", edits);
         AfterFormatChange();
     }
 
@@ -328,6 +342,191 @@ public sealed class SpreadsheetView : UserControl
         SyncScrollBars();
         ContentChanged?.Invoke(this, EventArgs.Empty);
         SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void PushUndo(string description, IReadOnlyList<CellEdit> edits)
+    {
+        if (edits.Count > 0)
+        {
+            _canvas.Undo.Push(new UndoStep(description, edits));
+        }
+    }
+
+    // --------------------------------------------------- recortar, copiar, colar
+
+    private ClipboardContent? _clipboard;
+
+    /// <summary>Verdadeiro quando há algo para colar — útil para habilitar/desabilitar um item de menu.</summary>
+    public bool HasClipboardContent => _clipboard is not null;
+
+    public void Copy()
+    {
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        _clipboard = ClipboardContent.Capture(sheet, _canvas.Selection.Range, isCut: false);
+    }
+
+    public void Cut()
+    {
+        Worksheet? sheet = CurrentSheet();
+
+        if (sheet is null)
+        {
+            return;
+        }
+
+        _clipboard = ClipboardContent.Capture(sheet, _canvas.Selection.Range, isCut: true);
+    }
+
+    public void Paste()
+    {
+        CalculationEngine? engine = _canvas.Engine;
+
+        if (_clipboard is null || engine is null || string.IsNullOrEmpty(_canvas.SheetName))
+        {
+            return;
+        }
+
+        ClipboardContent clipboard = _clipboard;
+        CellAddress targetAnchor = _canvas.Selection.Active;
+
+        IReadOnlyList<CellEdit> pasted = clipboard.ComputePaste(engine.Workbook, _canvas.SheetName, targetAnchor);
+
+        // A célula pode ter fórmula: grava através do motor, e não direto na aba,
+        // para ela entrar no grafo de dependências e ser calculada. ComputePaste
+        // não escreve nada sozinho — é responsabilidade de quem aplica o resultado.
+        engine.AutoRecalculate = false;
+
+        foreach (CellEdit edit in pasted)
+        {
+            engine.SetCell(edit.Location, edit.After);
+        }
+
+        engine.AutoRecalculate = true;
+        engine.Recalculate();
+
+        PushUndo(clipboard.IsCut ? "Recortar" : "Colar", pasted);
+
+        if (clipboard.IsCut)
+        {
+            FinishCut(clipboard, engine, targetAnchor);
+        }
+
+        if (pasted.Count > 0)
+        {
+            SelectPastedRange(clipboard, targetAnchor);
+        }
+
+        AfterFormatChange();
+    }
+
+    /// <summary>
+    /// Termina o recorte: apaga a origem e esvazia a área de transferência, para
+    /// um segundo Ctrl+V não colar de novo — igual ao Excel, que só deixa colar
+    /// um recorte uma vez.
+    /// </summary>
+    private void FinishCut(ClipboardContent clipboard, CalculationEngine engine, CellAddress targetAnchor)
+    {
+        Worksheet? sourceSheet = engine.Workbook.TryGetWorksheet(clipboard.SourceSheet, out Worksheet? sheet) ? sheet : null;
+
+        if (sourceSheet is not null)
+        {
+            // Se colou na mesma aba de onde recortou e o destino encosta na
+            // origem, as células que já receberam o conteúdo colado não podem
+            // ser apagadas de novo — senão o "mover" perderia o próprio conteúdo
+            // que acabou de chegar.
+            var pastedOver = string.Equals(clipboard.SourceSheet, _canvas.SheetName, StringComparison.OrdinalIgnoreCase)
+                ? new HashSet<CellAddress>(clipboard.DestinationAddresses(targetAnchor))
+                : [];
+
+            engine.AutoRecalculate = false;
+
+            foreach (CellAddress address in clipboard.SourceRange.Addresses())
+            {
+                if (!pastedOver.Contains(address) && !sourceSheet.GetCell(address).IsEmpty)
+                {
+                    engine.ClearCell(new CellLocation(clipboard.SourceSheet, address));
+                }
+            }
+
+            engine.AutoRecalculate = true;
+            engine.Recalculate();
+        }
+
+        _clipboard = null;
+    }
+
+    private void SelectPastedRange(ClipboardContent clipboard, CellAddress targetAnchor)
+    {
+        var farCorner = new CellAddress(
+            Math.Min(targetAnchor.Row + clipboard.RowCount - 1, CellAddress.MaxRows - 1),
+            Math.Min(targetAnchor.Column + clipboard.ColumnCount - 1, CellAddress.MaxColumns - 1));
+
+        _canvas.Selection.MoveTo(targetAnchor);
+        _canvas.Selection.ExtendTo(farCorner);
+    }
+
+    // ------------------------------------------------------------ desfazer/refazer
+
+    public bool CanUndo => _canvas.Undo.CanUndo;
+
+    public bool CanRedo => _canvas.Undo.CanRedo;
+
+    public string? NextUndoDescription => _canvas.Undo.NextUndoDescription;
+
+    public string? NextRedoDescription => _canvas.Undo.NextRedoDescription;
+
+    public void Undo()
+    {
+        UndoStep? step = _canvas.Undo.Undo();
+
+        if (step is null)
+        {
+            return;
+        }
+
+        GoToStepSheet(step);
+        _canvas.ApplyEdits(step.Edits, useAfter: false);
+        AfterFormatChange();
+    }
+
+    public void Redo()
+    {
+        UndoStep? step = _canvas.Undo.Redo();
+
+        if (step is null)
+        {
+            return;
+        }
+
+        GoToStepSheet(step);
+        _canvas.ApplyEdits(step.Edits, useAfter: true);
+        AfterFormatChange();
+    }
+
+    /// <summary>
+    /// Troca para a aba de onde o passo veio, caso o usuário tenha navegado para
+    /// outro lugar entre a ação original e o Ctrl+Z — senão desfazer aconteceria
+    /// "invisível", numa aba que não é a que está na tela.
+    /// </summary>
+    private void GoToStepSheet(UndoStep step)
+    {
+        if (step.Edits.Count == 0)
+        {
+            return;
+        }
+
+        string sheetName = step.Edits[0].Location.SheetName;
+
+        if (!string.Equals(sheetName, _canvas.SheetName, StringComparison.OrdinalIgnoreCase))
+        {
+            SheetName = sheetName;
+        }
     }
 
     // -------------------------------------------------------------- edição
@@ -484,17 +683,25 @@ public sealed class SpreadsheetView : UserControl
         }
 
         var location = new CellLocation(_canvas.SheetName, address);
-        Cell existing = engine.Workbook[_canvas.SheetName].GetCell(address);
+        Cell before = engine.Workbook[_canvas.SheetName].GetCell(address);
+        Cell after;
 
         try
         {
-            engine.SetCell(location, CellInput.Parse(text, existing));
+            after = CellInput.Parse(text, before);
+            engine.SetCell(location, after);
         }
         catch (Nordxcel.Core.Formulas.FormulaSyntaxException)
         {
             // Fórmula malformada não altera a planilha; guarda o texto como está para
             // o usuário ver o que digitou e corrigir.
-            engine.SetCell(location, existing with { Formula = null, Value = CellValue.Text(text) });
+            after = before with { Formula = null, Value = CellValue.Text(text) };
+            engine.SetCell(location, after);
+        }
+
+        if (after != before)
+        {
+            PushUndo("Digitar", [new CellEdit(location, before, after)]);
         }
 
         _canvas.Refresh();

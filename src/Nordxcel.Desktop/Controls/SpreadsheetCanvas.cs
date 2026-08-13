@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Nordxcel.Core.Calculation;
+using Nordxcel.Core.Editing;
 using Nordxcel.Core.Formatting;
 using Nordxcel.Core.Layout;
 using Nordxcel.Core.Model;
@@ -109,6 +110,24 @@ public sealed class SpreadsheetCanvas : Control
     /// <summary>Esc chegando na grade enquanto o editor ainda não pegou o foco.</summary>
     public event EventHandler? CancelRequested;
 
+    /// <summary>Ctrl+C: copiar a seleção atual.</summary>
+    public event EventHandler? CopyRequested;
+
+    /// <summary>Ctrl+X: recortar a seleção atual.</summary>
+    public event EventHandler? CutRequested;
+
+    /// <summary>Ctrl+V: colar na seleção atual.</summary>
+    public event EventHandler? PasteRequested;
+
+    /// <summary>Ctrl+Z: desfazer o último passo.</summary>
+    public event EventHandler? UndoRequested;
+
+    /// <summary>Ctrl+Y ou Ctrl+Shift+Z: refazer o último passo desfeito.</summary>
+    public event EventHandler? RedoRequested;
+
+    /// <summary>Disparado depois de um Delete/Backspace apagar células, com o antes/depois de cada uma.</summary>
+    public event EventHandler<IReadOnlyList<CellEdit>>? CellsCleared;
+
     /// <summary>
     /// Ligado pela view enquanto o editor está aberto. Existe porque o foco do editor
     /// só chega no passo seguinte do laço de interface, e nesse intervalo as teclas
@@ -167,6 +186,69 @@ public sealed class SpreadsheetCanvas : Control
 
     public Cell ActiveCell =>
         ResolveGeometry()?.Sheet.GetCell(Selection.Active) ?? Cell.Empty;
+
+    /// <summary>
+    /// Pilha de desfazer/refazer da pasta de trabalho inteira. Fica aqui, e não na
+    /// <c>SpreadsheetView</c>, porque o próprio Delete/Backspace (tratado aqui) já
+    /// precisa registrar passos, e não faria sentido ter duas pilhas.
+    /// </summary>
+    public UndoManager Undo { get; } = new();
+
+    /// <summary>
+    /// Aplica de volta o lado <see cref="CellEdit.Before"/> (desfazer) ou
+    /// <see cref="CellEdit.After"/> (refazer) de cada edição, recalculando uma
+    /// vez só no fim, e seleciona o intervalo afetado — como o Excel faz, para
+    /// mostrar onde a mudança aconteceu.
+    /// </summary>
+    public void ApplyEdits(IReadOnlyList<CellEdit> edits, bool useAfter)
+    {
+        if (_engine is null || edits.Count == 0)
+        {
+            return;
+        }
+
+        _engine.AutoRecalculate = false;
+
+        foreach (CellEdit edit in edits)
+        {
+            _engine.SetCell(edit.Location, useAfter ? edit.After : edit.Before);
+        }
+
+        _engine.AutoRecalculate = true;
+        _engine.Recalculate();
+
+        SelectBoundingRange(edits);
+
+        ContentChanged?.Invoke(this, EventArgs.Empty);
+        Refresh();
+    }
+
+    private void SelectBoundingRange(IReadOnlyList<CellEdit> edits)
+    {
+        // As edições podem vir de outra aba (undo depois de trocar de aba); só
+        // ajusta a seleção quando elas realmente pertencem ao que está na tela.
+        if (edits.Count == 0 ||
+            !string.Equals(edits[0].Location.SheetName, _sheetName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        CellAddress first = edits[0].Location.Address;
+        int minRow = first.Row, maxRow = first.Row, minColumn = first.Column, maxColumn = first.Column;
+
+        foreach (CellEdit edit in edits)
+        {
+            CellAddress address = edit.Location.Address;
+            minRow = Math.Min(minRow, address.Row);
+            maxRow = Math.Max(maxRow, address.Row);
+            minColumn = Math.Min(minColumn, address.Column);
+            maxColumn = Math.Max(maxColumn, address.Column);
+        }
+
+        Selection.MoveTo(new CellAddress(minRow, minColumn));
+        Selection.ExtendTo(new CellAddress(maxRow, maxColumn));
+        ScrollIntoView(new CellAddress(minRow, minColumn));
+    }
 
     /// <summary>Menor posição horizontal de rolagem permitida — o fim da faixa de colunas congeladas.</summary>
     public double MinScrollX => ResolveGeometry() is { } geometry ? FrozenWidth(geometry) : 0d;
@@ -891,6 +973,31 @@ public sealed class SpreadsheetCanvas : Control
                 NotifySelection();
                 break;
 
+            case Key.C when control:
+                CopyRequested?.Invoke(this, EventArgs.Empty);
+                break;
+
+            case Key.X when control:
+                CutRequested?.Invoke(this, EventArgs.Empty);
+                break;
+
+            case Key.V when control:
+                PasteRequested?.Invoke(this, EventArgs.Empty);
+                break;
+
+            // Ctrl+Y é o atalho tradicional do Windows para refazer; Ctrl+Shift+Z é
+            // o do macOS/da maioria dos outros aplicativos — aceita os dois. A
+            // condição do redo precisa vir antes da do undo, senão Ctrl+Shift+Z
+            // bateria primeiro em "Key.Z when control" e nunca chegaria aqui.
+            case Key.Z when control && shift:
+            case Key.Y when control:
+                RedoRequested?.Invoke(this, EventArgs.Empty);
+                break;
+
+            case Key.Z when control:
+                UndoRequested?.Invoke(this, EventArgs.Empty);
+                break;
+
             default:
                 return;
         }
@@ -969,20 +1076,33 @@ public sealed class SpreadsheetCanvas : Control
 
     private void ClearSelection()
     {
+        IReadOnlyList<CellEdit> edits = ClearRange(Selection.Range);
+
+        if (edits.Count > 0)
+        {
+            CellsCleared?.Invoke(this, edits);
+        }
+    }
+
+    /// <summary>
+    /// Apaga as células com conteúdo dentro do intervalo, devolvendo o antes/depois
+    /// de cada uma — é o que vira um passo de desfazer. Limpa só o que existe:
+    /// varrer uma coluna inteira célula a célula seria inútil.
+    /// </summary>
+    private IReadOnlyList<CellEdit> ClearRange(CellRange range)
+    {
         if (_engine is null)
         {
-            return;
+            return [];
         }
 
-        CellRange range = Selection.Range;
         SheetGeometry? geometry = ResolveGeometry();
 
         if (geometry is null)
         {
-            return;
+            return [];
         }
 
-        // Limpa só o que existe: varrer uma coluna inteira célula a célula seria inútil.
         var targets = new List<CellAddress>();
 
         foreach (CellAddress address in geometry.Sheet.Cells.Keys)
@@ -995,14 +1115,21 @@ public sealed class SpreadsheetCanvas : Control
 
         if (targets.Count == 0)
         {
-            return;
+            return [];
         }
+
+        var edits = new List<CellEdit>(targets.Count);
 
         _engine.AutoRecalculate = false;
 
         foreach (CellAddress address in targets)
         {
-            _engine.ClearCell(new CellLocation(_sheetName, address));
+            var location = new CellLocation(_sheetName, address);
+            Cell before = geometry.Sheet.GetCell(address);
+
+            _engine.ClearCell(location);
+
+            edits.Add(new CellEdit(location, before, Cell.Empty));
         }
 
         _engine.AutoRecalculate = true;
@@ -1010,6 +1137,8 @@ public sealed class SpreadsheetCanvas : Control
 
         ContentChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
+
+        return edits;
     }
 
     private int VisibleRowCount(SheetGeometry geometry) =>

@@ -11,6 +11,14 @@
 
     <DockPanel>
         <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_Editar">
+                <MenuItem x:Name="UndoMenuItem" Header="Desfazer" InputGesture="Ctrl+Z" Click="OnUndo" />
+                <MenuItem x:Name="RedoMenuItem" Header="Refazer" InputGesture="Ctrl+Y" Click="OnRedo" />
+                <Separator />
+                <MenuItem Header="Recortar" InputGesture="Ctrl+X" Click="OnCut" />
+                <MenuItem Header="Copiar" InputGesture="Ctrl+C" Click="OnCopy" />
+                <MenuItem Header="Colar" InputGesture="Ctrl+V" Click="OnPaste" />
+            </MenuItem>
             <MenuItem Header="_Exibir">
                 <MenuItem Header="Congelar Painéis" Click="OnFreezePanes" />
                 <MenuItem Header="Congelar Linha Superior" Click="OnFreezeTopRow" />

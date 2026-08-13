@@ -17,7 +17,8 @@ namespace Nordxcel.Core.Editing;
 public static class RangeEditing
 {
     /// <summary>
-    /// Aplica a transformação a cada célula do intervalo.
+    /// Aplica a transformação a cada célula do intervalo, devolvendo o antes/depois
+    /// de cada uma que de fato mudou — é o que vira um passo de desfazer.
     /// <para>
     /// Para seleção de linha ou coluna inteira — o que um clique no cabeçalho
     /// produz — só toca nas células que já têm algum conteúdo. Sem essa guarda,
@@ -27,10 +28,12 @@ public static class RangeEditing
     /// para evitar.
     /// </para>
     /// </summary>
-    public static void Apply(Worksheet sheet, CellRange range, Func<Cell, Cell> transform)
+    public static IReadOnlyList<CellEdit> Apply(Worksheet sheet, CellRange range, Func<Cell, Cell> transform)
     {
         ArgumentNullException.ThrowIfNull(sheet);
         ArgumentNullException.ThrowIfNull(transform);
+
+        var edits = new List<CellEdit>();
 
         if (IsUnbounded(range))
         {
@@ -38,39 +41,44 @@ public static class RangeEditing
             // o que não pode acontecer enquanto ainda se está enumerando o dicionário.
             foreach (CellAddress address in sheet.Cells.Keys.Where(range.Contains).ToList())
             {
-                ApplyToCell(sheet, address, transform);
+                ApplyToCell(sheet, address, transform, edits);
             }
 
-            return;
+            return edits;
         }
 
         foreach (CellAddress address in range.Addresses())
         {
-            ApplyToCell(sheet, address, transform);
+            ApplyToCell(sheet, address, transform, edits);
         }
+
+        return edits;
     }
 
     /// <summary>Atalho para mudanças que só mexem no estilo, preservando o resto da célula.</summary>
-    public static void ApplyStyle(Worksheet sheet, CellRange range, Func<CellStyle, CellStyle> transform)
+    public static IReadOnlyList<CellEdit> ApplyStyle(Worksheet sheet, CellRange range, Func<CellStyle, CellStyle> transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
 
-        Apply(sheet, range, cell => cell with { Style = transform(cell.Style) });
+        return Apply(sheet, range, cell => cell with { Style = transform(cell.Style) });
     }
 
     /// <summary>Atalho para trocar o formato de número, preservando o resto da célula.</summary>
-    public static void ApplyNumberFormat(Worksheet sheet, CellRange range, string? mask) =>
+    public static IReadOnlyList<CellEdit> ApplyNumberFormat(Worksheet sheet, CellRange range, string? mask) =>
         Apply(sheet, range, cell => cell with { NumberFormat = mask });
 
-    private static void ApplyToCell(Worksheet sheet, CellAddress address, Func<Cell, Cell> transform)
+    private static void ApplyToCell(Worksheet sheet, CellAddress address, Func<Cell, Cell> transform, List<CellEdit> edits)
     {
-        Cell current = sheet.GetCell(address);
-        Cell updated = transform(current);
+        Cell before = sheet.GetCell(address);
+        Cell after = transform(before);
 
-        if (updated != current)
+        if (after == before)
         {
-            sheet.SetCell(address, updated);
+            return;
         }
+
+        sheet.SetCell(address, after);
+        edits.Add(new CellEdit(new CellLocation(sheet.Name, address), before, after));
     }
 
     /// <summary>

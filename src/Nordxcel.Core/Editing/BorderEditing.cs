@@ -36,30 +36,44 @@ public enum BorderPreset
 /// </summary>
 public static class BorderEditing
 {
-    public static void Apply(Worksheet sheet, CellRange range, BorderPreset preset, BorderLineStyle style, RgbColor color)
+    public static IReadOnlyList<CellEdit> Apply(
+        Worksheet sheet,
+        CellRange range,
+        BorderPreset preset,
+        BorderLineStyle style,
+        RgbColor color)
     {
         ArgumentNullException.ThrowIfNull(sheet);
+
+        var edits = new List<CellEdit>();
 
         // Contorno numa coluna ou linha inteira não faz sentido — seria uma borda
         // ao redor de mais de um milhão de linhas — então a operação é ignorada.
         if (range.RowCount >= CellAddress.MaxRows || range.ColumnCount >= CellAddress.MaxColumns)
         {
-            return;
+            return edits;
         }
 
         var edge = new BorderEdge(style, color);
 
         foreach (CellAddress address in range.Addresses())
         {
-            Cell cell = sheet.GetCell(address);
-            CellBorders current = cell.Style.Borders;
+            Cell before = sheet.GetCell(address);
+            CellBorders current = before.Style.Borders;
             CellBorders updated = ResolveBorders(current, edge, preset, range, address);
 
-            if (!updated.Equals(current))
+            if (updated.Equals(current))
             {
-                sheet.SetCell(address, cell with { Style = cell.Style with { Borders = updated } });
+                continue;
             }
+
+            Cell after = before with { Style = before.Style with { Borders = updated } };
+
+            sheet.SetCell(address, after);
+            edits.Add(new CellEdit(new CellLocation(sheet.Name, address), before, after));
         }
+
+        return edits;
     }
 
     private static CellBorders ResolveBorders(

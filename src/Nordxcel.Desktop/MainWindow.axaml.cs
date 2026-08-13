@@ -65,6 +65,12 @@ public partial class MainWindow : Window
     {
         Formulas.Update(Sheet.SelectionReference, Sheet.ActiveCellText);
         Toolbar.UpdateFromStyle(Sheet.ActiveStyle, Sheet.ActiveNumberFormat);
+
+        UndoMenuItem.Header = Sheet.NextUndoDescription is { } undo ? $"Desfazer {undo}" : "Desfazer";
+        UndoMenuItem.IsEnabled = Sheet.CanUndo;
+
+        RedoMenuItem.Header = Sheet.NextRedoDescription is { } redo ? $"Refazer {redo}" : "Refazer";
+        RedoMenuItem.IsEnabled = Sheet.CanRedo;
     }
 
     /// <summary>
@@ -103,4 +109,34 @@ public partial class MainWindow : Window
     private void OnFreezeFirstColumn(object? sender, RoutedEventArgs e) => Sheet.FreezeFirstColumn();
 
     private void OnUnfreezePanes(object? sender, RoutedEventArgs e) => Sheet.UnfreezePanes();
+
+    private void OnUndo(object? sender, RoutedEventArgs e)
+    {
+        Sheet.Undo();
+        Sheet.FocusGrid();
+    }
+
+    private void OnRedo(object? sender, RoutedEventArgs e)
+    {
+        Sheet.Redo();
+        Sheet.FocusGrid();
+    }
+
+    private void OnCut(object? sender, RoutedEventArgs e)
+    {
+        Sheet.Cut();
+        Sheet.FocusGrid();
+    }
+
+    private void OnCopy(object? sender, RoutedEventArgs e)
+    {
+        Sheet.Copy();
+        Sheet.FocusGrid();
+    }
+
+    private void OnPaste(object? sender, RoutedEventArgs e)
+    {
+        Sheet.Paste();
+        Sheet.FocusGrid();
+    }
 }

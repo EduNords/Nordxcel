@@ -117,8 +117,47 @@ public class RangeEditingTests
         // deve materializar uma entrada nova no dicionário esparso.
         var sheet = new Worksheet("DCF");
 
-        RangeEditing.ApplyStyle(sheet, CellRange.Parse("A1"), s => s);
+        IReadOnlyList<CellEdit> edits = RangeEditing.ApplyStyle(sheet, CellRange.Parse("A1"), s => s);
 
         Assert.Equal(0, sheet.CellCount);
+        Assert.Empty(edits);
+    }
+
+    [Fact]
+    public void Apply_DevolveAntesEDepoisDeCadaCelulaQueMudou()
+    {
+        var sheet = new Worksheet("DCF");
+        sheet.SetValue(At("A1"), CellValue.Number(10));
+
+        IReadOnlyList<CellEdit> edits = RangeEditing.ApplyStyle(sheet, CellRange.Parse("A1:B1"), s => s with { Bold = true });
+
+        Assert.Equal(2, edits.Count);
+
+        CellEdit a1 = Assert.Single(edits, e => e.Location.Address.Equals(At("A1")));
+        Assert.False(a1.Before.Style.Bold);
+        Assert.True(a1.After.Style.Bold);
+        Assert.Equal(10d, a1.After.Value.AsNumber()); // o valor não muda, só o estilo
+
+        CellEdit b1 = Assert.Single(edits, e => e.Location.Address.Equals(At("B1")));
+        Assert.True(b1.Before.Value.IsBlank);
+        Assert.True(b1.After.Style.Bold);
+    }
+
+    [Fact]
+    public void Apply_AsEdicoesDevolvidasDaoParaDesfazer()
+    {
+        // O uso real: aplicar Before de volta reproduz o estado de antes.
+        var sheet = new Worksheet("DCF");
+        sheet.SetValue(At("A1"), CellValue.Number(10));
+
+        IReadOnlyList<CellEdit> edits = RangeEditing.ApplyStyle(sheet, CellRange.Parse("A1"), s => s with { Italic = true });
+
+        foreach (CellEdit edit in edits)
+        {
+            sheet.SetCell(edit.Location.Address, edit.Before);
+        }
+
+        Assert.False(sheet.GetCell(At("A1")).Style.Italic);
+        Assert.Equal(10d, sheet.GetCell(At("A1")).Value.AsNumber());
     }
 }

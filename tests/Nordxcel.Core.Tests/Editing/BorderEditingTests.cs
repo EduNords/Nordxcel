@@ -143,8 +143,23 @@ public class BorderEditingTests
         var sheet = new Worksheet("DCF");
         var wholeColumn = new CellRange(new CellAddress(0, 1), new CellAddress(CellAddress.MaxRows - 1, 1));
 
-        BorderEditing.Apply(sheet, wholeColumn, BorderPreset.All, BorderLineStyle.Thin, RgbColor.Black);
+        IReadOnlyList<CellEdit> edits = BorderEditing.Apply(sheet, wholeColumn, BorderPreset.All, BorderLineStyle.Thin, RgbColor.Black);
 
         Assert.Equal(0, sheet.CellCount);
+        Assert.Empty(edits);
+    }
+
+    [Fact]
+    public void Apply_DevolveSoAsCelulasQueRealmenteGanharamBorda()
+    {
+        var sheet = new Worksheet("DCF");
+
+        // Contorno de 3x3: 8 células do perímetro mudam, a do meio (B2) não.
+        IReadOnlyList<CellEdit> edits = BorderEditing.Apply(sheet, CellRange.Parse("A1:C3"), BorderPreset.Outline, BorderLineStyle.Thin, RgbColor.Black);
+
+        Assert.Equal(8, edits.Count);
+        Assert.DoesNotContain(edits, e => e.Location.Address.Equals(At("B2")));
+        Assert.All(edits, e => Assert.False(e.Before.Style.Borders.HasAny));
+        Assert.All(edits, e => Assert.True(e.After.Style.Borders.HasAny));
     }
 }
