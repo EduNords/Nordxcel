@@ -73,6 +73,18 @@ public static class CellInput
 
         if (TryParseNumber(trimmed, format, out double number))
         {
+            // Igual ao Excel: número simples digitado numa célula que já está
+            // formatada como porcentagem é interpretado como o valor em
+            // porcentagem, não o valor bruto — 10 numa célula "0%" vira 10%,
+            // não 1000%. Só se aplica à entrada; formatar como porcentagem uma
+            // célula que já tinha um número (ordem inversa) não reescala nada,
+            // exatamente como o Excel — o número que já estava ali só passa a
+            // ser multiplicado por 100 na exibição.
+            if (IsPercentFormat(baseline.NumberFormat))
+            {
+                number /= 100d;
+            }
+
             return Literal(baseline, CellValue.Number(number));
         }
 
@@ -144,6 +156,9 @@ public static class CellInput
         Value = value,
         NumberFormat = mask is null ? baseline.NumberFormat : baseline.NumberFormat ?? mask,
     };
+
+    private static bool IsPercentFormat(string? mask) =>
+        !string.IsNullOrWhiteSpace(mask) && NumberFormat.Parse(mask).IsPercent;
 
     private static bool TryParsePercent(string text, NumberFormatCulture culture, out double value)
     {

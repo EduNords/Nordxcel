@@ -1391,15 +1391,35 @@ public sealed class SpreadsheetCanvas : Control
 
         var outline = new Rect(start.X, start.Y, end.Right - start.X, end.Bottom - start.Y);
 
-        context.DrawRectangle(null, _theme.SelectionBorder, outline);
+        context.DrawRectangle(null, _theme.SelectionBorder, InsetForStroke(outline, _theme.SelectionBorder.Thickness));
 
         if (!Selection.IsSingleCell)
         {
-            context.DrawRectangle(
-                null,
-                _theme.GridLine,
-                CellRect(geometry, Selection.Active.Row, Selection.Active.Column, scrollX, scrollY));
+            Rect activeRect = CellRect(geometry, Selection.Active.Row, Selection.Active.Column, scrollX, scrollY);
+            context.DrawRectangle(null, _theme.GridLine, InsetForStroke(activeRect, _theme.GridLine.Thickness));
         }
+    }
+
+    /// <summary>
+    /// Encolhe o retângulo pela metade da espessura do traço antes de desenhar.
+    /// <para>
+    /// <c>DrawRectangle</c> centraliza o traço exatamente em cima da borda do
+    /// retângulo — metade da espessura fica para dentro, metade para fora. Como a
+    /// borda de uma célula é compartilhada com a vizinha, sem esse encolhimento o
+    /// traço "vaza" para a célula ao lado: a seleção parece maior do que a célula
+    /// e sobreposta às vizinhas, em vez de contida dentro dela como no Excel.
+    /// </para>
+    /// </summary>
+    private static Rect InsetForStroke(Rect rect, double thickness)
+    {
+        double inset = thickness / 2d;
+
+        double x = Math.Round(rect.X + inset);
+        double y = Math.Round(rect.Y + inset);
+        double width = Math.Max(0d, Math.Round(rect.Width - inset * 2d));
+        double height = Math.Max(0d, Math.Round(rect.Height - inset * 2d));
+
+        return new Rect(x, y, width, height);
     }
 
     private void DrawGridLines(

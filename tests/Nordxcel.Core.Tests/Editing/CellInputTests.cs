@@ -61,6 +61,44 @@ public class CellInputTests
         Assert.Equal("0.000%", Parse("8%", existing).NumberFormat);
     }
 
+    [Fact]
+    public void NumeroSimples_NumaCelulaJaFormatadaComoPorcentagem_EhInterpretadoComoPorcentagem()
+    {
+        // Igual ao Excel: formatar a célula como porcentagem primeiro e só depois
+        // digitar faz o número digitado já ser lido como o valor em porcentagem —
+        // 10 vira 10%, guardado como 0,10, não 1000%.
+        var existing = new Cell { NumberFormat = StandardNumberFormats.Percent };
+
+        Cell cell = Parse("10", existing);
+
+        Assert.Equal(0.10d, cell.Value.AsNumber());
+        Assert.Equal(StandardNumberFormats.Percent, cell.NumberFormat);
+    }
+
+    [Fact]
+    public void NumeroSimples_SemMascaraDePorcentagemAinda_NaoEhDivididoPor100()
+    {
+        // A ordem inversa — número já digitado, formato de porcentagem aplicado
+        // depois pelo botão da barra — não passa por CellInput.Parse nenhuma vez
+        // (RangeEditing.ApplyNumberFormat só troca a máscara, nunca o valor), e é
+        // assim mesmo no Excel: o número que já estava ali não é reescalado,
+        // só passa a ser multiplicado por 100 na exibição.
+        Cell cell = Parse("10");
+
+        Assert.Equal(10d, cell.Value.AsNumber());
+        Assert.Null(cell.NumberFormat);
+    }
+
+    [Fact]
+    public void NumeroComVirgula_NumaCelulaJaFormatadaComoPorcentagem_DivideOValorDigitado()
+    {
+        var existing = new Cell { NumberFormat = StandardNumberFormats.Percent };
+
+        Cell cell = Parse("12,5", existing);
+
+        Assert.Equal(0.125d, cell.Value.AsNumber());
+    }
+
     // -------------------------------------------------------------- moeda
 
     [Theory]

@@ -47,20 +47,57 @@ public sealed class SpreadsheetView : UserControl
 
     public SpreadsheetView()
     {
+        IBrush editorBorderBrush = new SolidColorBrush(Color.FromRgb(33, 115, 70)).ToImmutable();
+        var editorBorderThickness = new Thickness(2);
+
         _editor = new TextBox
         {
             IsVisible = false,
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Top,
             AcceptsReturn = false,
-            BorderThickness = new Thickness(2),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(33, 115, 70)).ToImmutable(),
+            BorderThickness = editorBorderThickness,
+            BorderBrush = editorBorderBrush,
             Background = Brushes.White,
             Padding = new Thickness(2, 0, 2, 0),
             FontFamily = new FontFamily("Calibri, Segoe UI, sans-serif"),
             FontSize = 11,
             VerticalContentAlignment = VerticalAlignment.Center,
+            FocusAdorner = null,
+            // O tema também define um tamanho mínimo (pensado para toque/acessibilidade,
+            // maior que uma linha de planilha) via MinWidth/MinHeight — sem zerar os
+            // dois, o controle não encolhe abaixo desse mínimo por mais que Width/Height
+            // sejam ajustados para caber exatamente na célula.
+            MinWidth = 0,
+            MinHeight = 0,
         };
+
+        // O TextBox do FluentTheme troca cor e espessura da borda por dentro do
+        // próprio template a cada pseudo-classe (foco, passar o mouse, etc.) —
+        // não lê a propriedade BorderBrush/BorderThickness de novo nesses estados,
+        // troca pelo valor destes recursos. Sem sobrescrever aqui, a borda muda
+        // pra azul (cor de destaque do tema) e de espessura assim que o editor
+        // ganha foco, que é o tempo todo enquanto se digita.
+        foreach (string key in new[]
+                 {
+                     "TextControlBorderBrush", "TextControlBorderBrushPointerOver",
+                     "TextControlBorderBrushFocused", "TextControlBorderBrushDisabled",
+                 })
+        {
+            _editor.Resources[key] = editorBorderBrush;
+        }
+
+        foreach (string key in new[]
+                 {
+                     "TextControlBackground", "TextControlBackgroundPointerOver",
+                     "TextControlBackgroundFocused", "TextControlBackgroundDisabled",
+                 })
+        {
+            _editor.Resources[key] = Brushes.White;
+        }
+
+        _editor.Resources["TextControlBorderThemeThickness"] = editorBorderThickness;
+        _editor.Resources["TextControlBorderThemeThicknessFocused"] = editorBorderThickness;
 
         _editor.KeyDown += OnEditorKeyDown;
         _editor.GotFocus += (_, _) => _editorHasFocus = true;
@@ -778,10 +815,13 @@ public sealed class SpreadsheetView : UserControl
 
     private void PositionEditor(Rect cell)
     {
-        // A borda de 2px do editor cobre a célula por igual dos dois lados.
-        _editor.Margin = new Thickness(cell.X - 1d, cell.Y - 1d, 0d, 0d);
-        _editor.Width = Math.Max(cell.Width + 2d, 60d);
-        _editor.Height = cell.Height + 2d;
+        // A borda interna de um TextBox é um Border comum, desenhado inteiro
+        // dentro da área alocada ao controle (ao contrário de um traço desenhado
+        // no Canvas, que fica centralizado em cima do limite e vaza pra fora) —
+        // então basta encaixar exatamente no retângulo da célula.
+        _editor.Margin = new Thickness(cell.X, cell.Y, 0d, 0d);
+        _editor.Width = Math.Max(cell.Width, 60d);
+        _editor.Height = cell.Height;
     }
 
     private void OnEditorKeyDown(object? sender, KeyEventArgs e)
