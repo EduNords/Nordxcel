@@ -4,6 +4,35 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <Product>Nordxcel</Product>
+    <AssemblyTitle>Nordxcel</AssemblyTitle>
+    <Company>Nordxcel</Company>
+    <Version>0.1.0</Version>
+    <Description>Planilha para modelagem financeira DCF — barra de fórmulas, Tabela de Dados e exportação para .xlsx.</Description>
+    <Copyright>© 2026 Nordxcel</Copyright>
+
+    <!-- Empacotamento (commit 17): plataformas que "dotnet publish -r &lt;rid&gt;" sabe gerar.
+         Não força nada na compilação comum sem RID — "dotnet build"/"dotnet test" seguem
+         framework-dependent, iguais a antes, como o PropertyGroup condicional abaixo garante. -->
+    <RuntimeIdentifiers>win-x64;osx-x64;osx-arm64;linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!--
+    Só entra em vigor quando a build já tem um RID resolvido — ou seja, num
+    "dotnet publish -r <rid>", nunca num "dotnet build"/"dotnet test" comum.
+    Sem essa condição, SelfContained=true incondicional quebraria o build de
+    desenvolvimento normal, que não passa RuntimeIdentifier nenhum.
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- PublishTrimmed fica desligado de propósito: Avalonia carrega muita coisa
+         via reflexão (XAML, temas) e trimming agressivo corta silenciosamente o
+         que não vê referência estática — sem uma bateria de teste de UI completa
+         rodando sobre cada publish, o risco de tela quebrada supera o ganho de
+         tamanho. Fica para quando existir essa cobertura. -->
   </PropertyGroup>
 
   <ItemGroup>
