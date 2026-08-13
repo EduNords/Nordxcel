@@ -163,6 +163,18 @@ public sealed class SpreadsheetView : UserControl
     /// <inheritdoc cref="SpreadsheetCanvas.NotifySheetRenamed"/>
     public void NotifySheetRenamed(string oldName, string newName) => _canvas.NotifySheetRenamed(oldName, newName);
 
+    /// <summary>
+    /// Limpa o histórico de desfazer/refazer e a área de transferência — usado ao
+    /// trocar de documento inteiro (novo/abrir). Um passo de desfazer ou um
+    /// recorte pendente que aponta para a aba de outro documento não faz
+    /// sentido nenhum depois da troca.
+    /// </summary>
+    public void ResetHistory()
+    {
+        _canvas.Undo.Clear();
+        _clipboard = null;
+    }
+
     public void Refresh()
     {
         _canvas.Refresh();
